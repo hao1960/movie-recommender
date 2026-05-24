@@ -294,6 +294,102 @@ python3 train_als.py --data_dir data/ml-25m --driver_memory 4g
 2. **每步有验证**：环境 `spark.range()` → 数据 `count()` 一致 → 训练 RMSE < 1.0 → API curl 返回 JSON
 3. **出问题先看日志**：训练脚本默认输出 INFO 级别日志，时间戳 + 消息体，足以定位 90% 的问题
 
+### Git 开发规范
+
+#### 仓库克隆与分支管理
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/<org>/movie-recommender.git
+cd movie-recommender
+
+# 2. 基于 main 创建功能分支（禁止直接在 main 上开发）
+git checkout main
+git pull origin main
+git checkout -b feature/<你的名字>/<功能简述>
+
+# 示例
+git checkout -b feature/zhangsan/als-training
+git checkout -b feature/lisi/flask-api
+git checkout -b fix/wangwu/data-format-detection
+```
+
+#### 分支命名规范
+
+| 前缀 | 用途 | 示例 |
+|------|------|------|
+| `feature/<name>/<desc>` | 新功能开发 | `feature/zhangsan/add-coverage-metric` |
+| `fix/<name>/<desc>` | Bug 修复 | `fix/lisi/coldstart-crash` |
+| `docs/<name>/<desc>` | 文档更新 | `docs/wangwu/api-examples` |
+| `exp/<name>/<desc>` | 实验性分支（不合并） | `exp/zhangsan/try-ncf-model` |
+
+#### 日常开发流程
+
+```bash
+# 每天开始工作前，同步 main 最新代码
+git checkout main
+git pull origin main
+
+# 切回自己的分支，rebase main（保持提交历史线性）
+git checkout feature/zhangsan/als-training
+git rebase main
+
+# 有冲突时解决冲突，然后继续
+# git add <冲突文件>
+# git rebase --continue
+
+# 提交代码
+git add <文件>
+git commit -m "feat: 实现 ALS 模型训练脚本"
+
+# 推送到远程（首次推送需要 -u）
+git push -u origin feature/zhangsan/als-training
+```
+
+#### Commit Message 规范
+
+采用 [Conventional Commits](https://www.conventionalcommits.org/) 格式：
+
+```
+<type>: <简短描述>
+
+<详细说明（可选）>
+```
+
+| type | 说明 |
+|------|------|
+| `feat` | 新功能 |
+| `fix` | Bug 修复 |
+| `docs` | 文档修改 |
+| `refactor`| 代码重构（不改变功能） |
+| `test` | 测试相关 |
+| `chore` | 构建/工具/依赖变更 |
+
+示例：
+```
+feat: 实现 1M/25M 数据集分隔符自动检测
+
+ratings.dat 使用 :: 分隔，ratings.csv 使用逗号分隔。
+通过检测文件扩展名自动选择解析方式，避免硬编码。
+```
+
+#### 代码合并（PR）流程
+
+1. 本地开发完成，通过自测后 push 到远程分支
+2. 在 GitHub 上创建 Pull Request（feature/xxx → main）
+3. 在 PR 描述中写清楚：**改了啥、怎么验证**
+4. 至少 1 人 Code Review 通过后才能合并
+5. 合并使用 **Squash and Merge**（将分支上的多个 commit 压缩为 1 个）
+6. 合并后删除远程分支
+
+#### 不要提交的内容
+
+- `venv/`、`__pycache__/`、`.pyc`（已在 .gitignore 中排除）
+- 数据集文件（`*.zip`、`ratings.dat` 等）
+- `output/` 下的训练产物（`part-*.csv`、模型文件）
+- IDE 配置文件（`.vscode/`、`.idea/`）
+- 任何包含密码/密钥的 `.env` 文件
+
 ### 重要约定
 
 - **始终激活虚拟环境**：每次新终端先 `source venv/bin/activate`
