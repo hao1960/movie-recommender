@@ -1,0 +1,48 @@
+# Python virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Spark output — keep directory with .gitkeep, ignore generated files
+output/user_recs/*
+!output/user_recs/.gitkeep
+output/movies/*
+!output/movies/.gitkeep
+output/als_model/*
+!output/als_model/.gitkeep
+
+# Spark runtime artifacts
+*.crc
+_SUCCESS
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Dataset files (large binaries, downloaded separately)
+data/ml-1m/*
+!data/ml-1m/.gitkeep
+data/ml-25m/*
+!data/ml-25m/.gitkeep
+*.zip
+*.tgz
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+*.log
