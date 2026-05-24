@@ -44,6 +44,7 @@ movie-recommender/
 │   └── als_model/       # ALS 模型 Parquet
 ├── train_als.py         # 离线训练脚本（实现代码见 design.md §4）
 ├── app.py               # Flask API 服务（实现代码见 design.md §5）
+├── download_data.sh      # 一键下载数据集脚本
 ├── requirements.txt     # Python 依赖
 ├── design.md            # 详细设计文档（含完整代码、ALS 原理、报告指引）
 ├── workflow.md          # 分阶段开发工作流（含验证标准）
@@ -64,10 +65,8 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# 4. 下载数据集
-mkdir -p data
-wget https://files.grouplens.org/datasets/movielens/ml-1m.zip
-unzip ml-1m.zip -d data/
+	# 4. 下载数据集（一次下载 ml-1m + ml-25m）
+	bash download_data.sh
 ```
 
 ## 开发约定

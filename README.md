@@ -94,11 +94,12 @@ pip install pyspark==3.4.1 flask==2.3.0 pandas==2.0.3
 ### Step 4：下载数据集
 
 ```bash
-mkdir -p data
-wget https://files.grouplens.org/datasets/movielens/ml-1m.zip
-unzip ml-1m.zip -d data/
+# 一键下载 ml-1m + ml-25m 到 data/ 下
+bash download_data.sh
 # 确认: ls data/ml-1m/ 应看到 ratings.dat, movies.dat, users.dat
 ```
+
+> 默认同时下载两个数据集。如果只想下某一个，可以直接用 `wget` 手动下载，见 [design.md](design.md) §3.1。
 
 ### Step 5：下载或创建训练脚本
 
