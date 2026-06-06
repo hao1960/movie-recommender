@@ -3,9 +3,9 @@
 ## 阶段总览
 
 ```
-Phase 1         Phase 2         Phase 3         Phase 4         Phase 5
-环境搭建 ──→ 数据管道 ──→ 模型训练与评估 ──→ API服务 ──→ 优化与扩展
-(0.5天)       (0.5天)        (1天)            (0.5天)        (按需)
+Phase 1         Phase 2         Phase 3         Phase 4         Phase 5         Phase 6
+环境搭建 ──→ 数据管道 ──→ 模型训练与评估 ──→ API服务 ──→ 优化与扩展 ──→ 测试验证
+(0.5天)       (0.5天)        (1天)            (0.5天)        (按需)          (0.5天)
 ```
 
 每个 Phase 结束都有明确的**验证标准**，不通过不进入下一阶段。
@@ -210,34 +210,56 @@ curl http://localhost:5000/health
 
 ---
 
-## Phase 5：优化与扩展（按需选择）
+## Phase 5：优化与扩展
 
-以下任务无顺序依赖，根据时间和需求选择性实现。
-
-### 5.1 超参数调优
-
-用 `CrossValidator` + `ParamGridBuilder` 搜索最优 `(rank, regParam, maxIter)` 组合。仅当 Phase 3 的基线 RMSE > 0.95 时优先级提高。
-
-### 5.2 HTML 前端页面
-
-用纯 HTML + 原生 JS 做一个推荐展示页：
-- 输入 userId → 调用 `/recommend/<id>` → 渲染电影卡片
-- 可嵌入 TMDb 海报图片（通过电影标题搜索）
-
-### 5.3 切换 25M 数据集
+### 5.1 超参数调优（已实现）
 
 ```bash
-# 重新训练即可，注意调大 shuffle.partitions
-python train_als.py --data_dir data/ml-25m --rank 50 --max_iter 15
+python train_als.py --tune
+# 搜索 18 组参数 × 3 折 = 54 次训练，输出最佳 rank/regParam/maxIter
 ```
 
-### 5.4 基于内容的冷启动方案
+### 5.2 冷启动内容推荐（已实现）
 
-对评分 < 5 条的用户，改为推荐其历史评分电影的同类电影（利用 genres 字段做 Jaccard 相似度）。
+评分 <5 条的用户自动用电影类型 Jaccard 相似度推荐，无需手动切换。
 
-### 5.5 添加实时日志
+### 5.3 混合推荐（已实现）
 
-在 Flask 中记录每次请求的 `user_id`、响应时间、返回数量，写入日志文件供后期分析。
+```bash
+python train_als.py --hybrid --alpha 0.7
+# ALS 候选池内按内容相似度加权融合重排序
+```
+
+### 5.4 切换 25M 数据集 + SQLite 模式
+
+```bash
+python train_als.py --data_dir data/ml-25m --driver_memory 4g
+python app.py --db output/recommender.db
+# SQLite 模式按需查询，无需全量加载到内存
+```
+
+### 5.5 结构化请求日志
+
+```bash
+python app.py --log_file logs/api.log
+# 自动记录 userId / 推荐条数 / 耗时，10MB 轮转
+```
+
+---
+
+## Phase 6：测试验证
+
+### 6.1 运行测试
+
+```bash
+python -m pytest tests/ -v
+# 预期: 10 passed，覆盖 /health /recommend /movie / 四个端点
+```
+
+### 6.2 验证标准
+
+- 所有 10 个测试通过
+- 覆盖正常返回、参数限制、404 错误等场景
 
 ---
 
@@ -245,5 +267,5 @@ python train_als.py --data_dir data/ml-25m --rank 50 --max_iter 15
 
 - **每个 Phase 结束时验证，不跳过**。Phase N 的 bug 留到 Phase N+2 排查代价是 10 倍。
 - **先用 ml-1m 跑通全流程，再考虑换 25M**。1M 数据每轮训练约 2 分钟，25M 约 20 分钟，迭代效率差一个数量级。
-- **代码改动后立即用 curl 验证 API**，不要等到全部写完了才测试。
+- **代码改动后立即用 curl 或 pytest 验证**，不要等到全部写完了才测试。
 - **遇到报错先查第八节排错表**，未覆盖的错误补充进去。

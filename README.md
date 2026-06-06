@@ -7,32 +7,36 @@
 ## 架构一览
 
 ```text
-MovieLens 数据集            Spark ALS 离线训练              Flask API 在线服务
-┌──────────────┐        ┌─────────────────────┐        ┌──────────────────┐
-│ ratings.dat  │ ────→  │ 1. 数据加载与清洗    │        │ GET /recommend/1  │
-│ movies.dat   │        │ 2. 训练/测试划分     │        │ GET /movie/1193   │
-│ users.dat    │        │ 3. ALS 矩阵分解      │ ────→  │ GET /health       │
-└──────────────┘        │ 4. RMSE + P/R/NDCG  │        └──────────────────┘
-                        │ 5. 全量 Top-N 推荐   │
-                        │ 6. CSV + 模型持久化  │
-                        └─────────────────────┘
+MovieLens 数据集            Spark ALS 离线训练                    Flask API 在线服务
+┌──────────────┐        ┌──────────────────────────┐        ┌──────────────────┐
+│ ratings.dat  │ ────→  │ 1. 数据加载与格式自动检测  │        │ GET /recommend/1  │
+│ movies.dat   │        │ 2. 训练/测试 80/20 划分    │        │ GET /movie/1193   │
+└──────────────┘        │ 3. ALS 训练 / 超参数调优   │ ────→  │ GET /health       │
+                        │ 4. 评估(6项指标)           │        │ 内存 / SQLite     │
+                        │ 5. 冷启动内容推荐           │        │ 结构化日志        │
+                        │ 6. 混合推荐(ALS+Content)   │        └──────────────────┘
+                        │ 7. 过滤已评分 → CSV 输出   │
+                        └──────────────────────────┘
 ```
 
-- **离线层**：Spark 批量训练，结果落盘为 CSV
-- **在线层**：Flask 启动时加载 CSV 到内存，纯 key-value 查询，毫秒级响应
+- **离线层**：Spark 批量训练，支持 ALS / 超参数调优 / 混合推荐 / 冷启动 fallback，结果落盘为 CSV
+- **在线层**：Flask 启动时加载 CSV 到内存 dict 或 SQLite，纯 key-value 查询，毫秒级响应
 
 ---
 
 ## 功能特性
 
-- [x] 支持 MovieLens 1M 和 25M 数据集，命令行切换
-- [x] ALS 模型训练，超参数可通过命令行配置
-- [x] 多维度评估：RMSE（评分预测）+ Precision@K / Recall@K / NDCG@K（排序质量）
-- [x] 冷启动分析：自动统计低评分用户占比
-- [x] 模型持久化为 Parquet 格式，支持后续增量推理
-- [x] Flask REST API：推荐查询、电影详情、健康检查
-- [x] 命令行参数化，无硬编码路径
-- [x] 完整日志输出，训练失败自动打印堆栈
+- [x] 支持 MovieLens 1M 和 25M 数据集，命令行切换，自动检测格式与编码
+- [x] ALS 模型训练 + **超参数网格搜索**（`--tune`，CrossValidator × ParamGridBuilder）
+- [x] **混合推荐**（`--hybrid`）：ALS 协同过滤 + 内容 Jaccard 相似度加权融合
+- [x] **冷启动内容推荐**：评分 <5 条的用户自动用电影类型相似度推荐
+- [x] **已评分过滤**：推荐结果自动排除用户已看过的电影
+- [x] 六项评估指标：RMSE + Precision@K + Recall@K + NDCG@K + Coverage + Diversity
+- [x] **SQLite 存储后端**（`--db`）：适合 25M 大数据集，无需全量加载到内存
+- [x] Flask REST API + 复古电影院风格 HTML 前端页面
+- [x] **结构化请求日志**（`--log_file`）：自动轮转，记录 userId / 推荐条数 / 耗时
+- [x] **pytest 集成测试**：10 个测试覆盖所有 API 端点
+- [x] 跨平台支持 Windows / Linux / macOS
 
 ---
 
@@ -257,7 +261,7 @@ curl http://localhost:5000/health
 
 ## 配置参考
 
-### 训练参数
+### 训练参数（train_als.py）
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -268,6 +272,19 @@ curl http://localhost:5000/health
 | `--reg_param` | 0.1 | L2 正则化系数，防止过拟合 |
 | `--top_n` | 10 | 为每个用户推荐的电影数 |
 | `--driver_memory` | 2g | Spark Driver JVM 堆内存 |
+| `--tune` | 关闭 | 启用超参数网格搜索（18 组 × 3 折交叉验证） |
+| `--hybrid` | 关闭 | 启用混合推荐（ALS + 内容相似度加权融合） |
+| `--alpha` | 0.7 | 混合推荐中 ALS 权重（0~1） |
+
+### API 服务参数（app.py）
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--port` | 5000 | Flask 服务端口 |
+| `--recs_dir` | `output/user_recs` | 推荐结果 CSV 目录 |
+| `--movies_dir` | `output/movies` | 电影映射 CSV 目录 |
+| `--db` | 无 | SQLite 数据库路径，启用后按需查询（适合 25M） |
+| `--log_file` | 无 | 日志文件路径，10MB 自动轮转保留 3 个备份 |
 
 ### 数据集规模对照
 

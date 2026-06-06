@@ -6,30 +6,36 @@
 
 ## 技术栈
 
-- **离线训练**: Python 3.8+, PySpark 3.4.1, Spark MLlib ALS
-- **在线服务**: Flask 2.3.0, Pandas 2.0.3
+- **离线训练**: Python 3.8+, PySpark 3.4.1, Spark MLlib ALS + CrossValidator
+- **在线服务**: Flask 2.3.0, Pandas 2.0.3, SQLite3（可选大容量模式）
+- **测试**: pytest 8.x, Flask test client
 - **数据源**: MovieLens 1M / 25M
 - **运行环境**: Ubuntu 20.04+ / Windows 10+ / macOS, Java 8, ≥4GB RAM
 
 ## 架构设计
 
 ```
-离线层 (Batch)                          在线层 (Serving)
-┌──────────────────────┐               ┌──────────────────┐
-│ train_als.py         │               │ app.py           │
-│  1. 加载 ratings.dat │   写入 CSV    │  启动时加载 CSV   │
-│  2. 训练/测试 80/20  │ ────────────→ │  到内存 dict      │
-│  3. ALS 模型训练      │               │                  │
-│  4. RMSE+P/R/NDCG评估 │               │ GET /recommend/:id│
-│  5. 全量 Top-N 推荐   │               │ GET /movie/:id    │
-│  6. CSV + 模型持久化  │               │ GET /health      │
-└──────────────────────┘               └──────────────────┘
+离线层 (Batch)                               在线层 (Serving)
+┌────────────────────────────┐              ┌────────────────────┐
+│ train_als.py               │              │ app.py             │
+│  1. 加载数据(自动格式/编码) │   写入 CSV   │  内存 dict 或 SQLite │
+│  2. 冷启动分析              │ ──────────→ │  结构化请求日志       │
+│  3. 训练/测试 80/20        │              │                    │
+│  4. ALS / 超参数网格搜索    │              │ GET /recommend/:id │
+│  5. 6项指标评估             │              │ GET /movie/:id     │
+│  6. 冷启动内容推荐          │              │ GET /health        │
+│  7. 混合推荐(ALS+Content)  │              │ GET / (HTML 前端)   │
+│  8. 过滤已评分 → 输出       │              │                    │
+└────────────────────────────┘              └────────────────────┘
 ```
 
 **核心设计决策**:
-- 全量离线预计算模式：训练完后一次性为所有用户生成推荐结果落盘，在线层只做 kv 查询
+- 全量离线预计算模式：训练后一次性为所有用户生成推荐结果落盘，在线层做 kv 查询
+- 冷启动用户（<5 条评分）自动切换为基于内容的电影类型 Jaccard 相似度推荐
+- 混合推荐在 ALS 候选池内按内容相似度加权重排序，避免全量 Cross Join
+- SQLite 模式适合 25M 数据集，启动无需全量加载到内存，按 userId 索引查询
 - 优点：Flask 无状态、响应毫秒级、可水平扩展
-- 缺点：无法处理新用户/新物品冷查询，需重新训练才能更新
+- 缺点：新用户/新物品冷查询依赖内容 fallback，全量重训练才能更新模型
 
 ## 目录结构
 
@@ -47,6 +53,11 @@ movie-recommender/
 ├── download_data.py     # 一键下载数据集脚本（跨平台，推荐）
 ├── download_data.sh      # 一键下载数据集脚本（Linux 备选）
 ├── requirements.txt     # Python 依赖
+├── tests/               # pytest 集成测试
+│   ├── __init__.py
+│   └── test_app.py      # Flask API 端点测试（10 cases）
+├── static/              # 前端静态文件
+│   └── index.html       # 复古电影院风格推荐展示页
 ├── design.md            # 详细设计文档（含完整代码、ALS 原理、报告指引）
 ├── workflow.md          # 分阶段开发工作流（含验证标准）
 ├── README.md            # 项目概览与快速开始
@@ -120,6 +131,8 @@ python download_data.py
 ### Git 约定
 - 不要提交数据集文件（.zip, ratings.dat 等），已在 .gitignore 中排除
 - output/ 下的生成文件不提交，只保留 .gitkeep 占位目录结构
+- `logs/` 目录不提交（运行时生成）
+- 提交前确保 `python -m pytest tests/ -q` 全部通过
 - 提交前确保 `python train_als.py --help` 和 `python app.py --help` 能正常运行
 
 ### 代码风格

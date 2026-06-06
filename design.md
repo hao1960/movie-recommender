@@ -388,10 +388,17 @@ if __name__ == "__main__":
 ### 4.2 运行训练
 
 ```bash
+# 默认参数训练（ALS 协同过滤 + 冷启动内容推荐）
 python train_als.py --data_dir data/ml-1m --output_dir output --rank 50 --max_iter 15
+
+# 超参数网格搜索（18 组 × 3 折交叉验证）
+python train_als.py --data_dir data/ml-1m --tune
+
+# 混合推荐（ALS + 内容相似度加权融合，alpha 控制 ALS 权重）
+python train_als.py --data_dir data/ml-1m --hybrid --alpha 0.7
 ```
 
-> **预期输出**：RMSE 约 0.83~0.90，Precision@10 / Recall@10 / NDCG@10 等排序指标也会一并打印。rank=50、maxIter=15 是经过权衡的推荐配置——rank 太低欠拟合，太高过拟合且训练变慢。使用 25M 数据集时，建议在 `init_spark` 中增大 `shuffle.partitions` 至 200。
+> **预期输出**：RMSE 约 0.83~0.90，Precision@10 / Recall@10 / NDCG@10 / Coverage / Diversity 等指标一并打印。rank=50、maxIter=15 是经过权衡的推荐配置。使用 25M 数据集时，建议增大 `--driver_memory 4g`。
 
 ### 4.3 超参数调优（可选）
 
@@ -560,17 +567,26 @@ if __name__ == "__main__":
 ### 5.2 启动服务与测试
 
 ```bash
-# 终端 1：启动 Flask
+# 内存模式（默认，适合 1M 数据集）
 python app.py --port 5000
 
-# 终端 2：测试接口（Windows 可用 curl.exe 或浏览器）
+# SQLite 模式（适合 25M 数据集，无需全量加载到内存）
+python app.py --port 5000 --db output/recommender.db
+
+# 启用文件日志
+python app.py --port 5000 --log_file logs/api.log
+
+# 终端 2：测试接口
 curl http://localhost:5000/recommend/1
 curl "http://localhost:5000/recommend/1?limit=5"
 curl http://localhost:5000/movie/1193
 curl http://localhost:5000/health
+
+# 运行测试
+python -m pytest tests/ -v
 ```
 
-浏览器访问 `http://localhost:5000` 打开推荐展示页面。若从其他机器访问，将 `localhost` 替换为服务器 IP，并确保防火墙放行端口 5000。
+浏览器访问 `http://localhost:5000` 打开复古电影院风格推荐展示页面。
 
 ---
 
@@ -665,7 +681,8 @@ ORDER BY user_type;
 | Precision@10 | Top-10 推荐中命中用户实际高评分电影的比例 | 训练脚本会输出 |
 | Recall@10 | 用户高评分电影中被 Top-10 推荐覆盖的比例 | 训练脚本会输出 |
 | NDCG@10 | 归一化折损累计增益——考虑排序位置质量的综合指标 | 训练脚本会输出 |
-| Coverage | 被推荐到的电影占全部电影的比例 | 越高说明推荐多样性越好 |
+| Coverage | 被推荐到的不同电影数占全部电影的比例 | 越高说明推荐多样性越好 |
+| Intra-list Diversity | 用户推荐列表内电影类型的平均 Jaccard 距离 | 越高说明列表内类型越多样 |
 
 **定性评估**：挑选 3~5 个用户，展示其历史高评分电影和 Top-10 推荐电影，人工判断推荐是否合理。
 
@@ -700,14 +717,15 @@ ORDER BY user_type;
 
 ## 九、扩展建议（加分项）
 
-| 难度 | 扩展内容 | 说明 |
+| 难度 | 扩展内容 | 状态 |
 |------|---------|------|
-| ★☆☆ | HTML 前端页面 | 用纯 HTML+JS 做一个简单的电影推荐展示页 |
-| ★★☆ | 超参数网格搜索 | 见 4.3 节代码，搜索 rank/regParam/maxIter 最优组合 |
-| ★★☆ | 基于内容的推荐 | 利用电影类型和标题 TF-IDF 计算物品相似度，解决冷启动 |
-| ★★★ | 混合推荐（Hybrid） | 加权融合 ALS 协同过滤 + Content-Based 的结果 |
-| ★★★ | Lambda 架构实时层 | 接入 Kafka 消费用户实时行为，用 Redis 存储实时特征 |
-| ★★★ | 模型 A/B 测试框架 | 多版本模型同时在线，按用户 ID hash 分流，对比点击率 |
+| ★☆☆ | HTML 前端页面 | ✅ 已完成 — 复古电影院风格推荐展示页 |
+| ★★☆ | 超参数网格搜索 | ✅ 已完成 — `--tune`，CrossValidator × ParamGridBuilder |
+| ★★☆ | 基于内容的推荐 | ✅ 已完成 — 冷启动用户自动使用 Jaccard 类型相似度 |
+| ★★☆ | 混合推荐（Hybrid） | ✅ 已完成 — `--hybrid --alpha 0.7`，ALS + Content 加权融合 |
+| ★★☆ | API 集成测试 | ✅ 已完成 — pytest 10 个测试覆盖所有端点 |
+| ★★★ | Lambda 架构实时层 | 待实现 — Kafka 消费实时行为 + Redis 实时特征 |
+| ★★★ | 模型增量更新 | 待实现 — 新数据 fine-tune 已有模型，避免全量重训练 |
 
 ---
 
