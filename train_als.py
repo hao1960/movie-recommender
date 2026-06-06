@@ -156,18 +156,28 @@ def load_ratings(spark: SparkSession, data_dir: str) -> DataFrame:
         path = os.path.join(data_dir, fname)
         if os.path.exists(path):
             logger.info(f"读取评分数据: {path} (分隔符='{delimiter}', 编码={encoding})")
-            df = load_dat_file(spark, path, ["userId", "movieId", "rating"], delimiter, encoding)
+            # CSV 文件用原生 reader（JVM 内处理，避免 Python worker 瓶颈）
+            if delimiter == ",":
+                df = (
+                    spark.read.option("header", "true").option("charset", encoding).csv(path)
+                    .select(
+                        col("userId").cast("int"),
+                        col("movieId").cast("int"),
+                        col("rating").cast("float"),
+                    )
+                )
+            else:
+                df = load_dat_file(spark, path, ["userId", "movieId", "rating"], delimiter, encoding)
+                df = df.select(
+                    col("userId").cast("int"),
+                    col("movieId").cast("int"),
+                    col("rating").cast("float"),
+                )
             break
     else:
         raise FileNotFoundError(f"在 {data_dir} 中未找到 ratings.dat 或 ratings.csv")
 
-    df = df.select(
-        col("userId").cast("int"),
-        col("movieId").cast("int"),
-        col("rating").cast("float"),
-    ).filter(
-        col("userId").isNotNull() & col("movieId").isNotNull()
-    )
+    df = df.filter(col("userId").isNotNull() & col("movieId").isNotNull())
     df.cache()
     n_users = df.select("userId").distinct().count()
     n_items = df.select("movieId").distinct().count()
@@ -183,12 +193,23 @@ def load_movies(spark: SparkSession, data_dir: str) -> DataFrame:
         path = os.path.join(data_dir, fname)
         if os.path.exists(path):
             logger.info(f"读取电影数据: {path} (分隔符='{delimiter}', 编码={encoding})")
-            df = load_dat_file(spark, path, ["movieId", "title", "genres"], delimiter, encoding)
+            if delimiter == ",":
+                df = (
+                    spark.read.option("header", "true").option("charset", encoding).csv(path)
+                    .select(
+                        col("movieId").cast("int"),
+                        col("title"),
+                        col("genres"),
+                    )
+                )
+            else:
+                df = load_dat_file(spark, path, ["movieId", "title", "genres"], delimiter, encoding)
+                df = df.select(col("movieId").cast("int"), "title", "genres")
             break
     else:
         raise FileNotFoundError(f"在 {data_dir} 中未找到 movies.dat 或 movies.csv")
 
-    return df.select(col("movieId").cast("int"), "title", "genres")
+    return df
 
 
 # ============================================================
