@@ -59,8 +59,8 @@ def parse_args() -> argparse.Namespace:
 # Spark 初始化
 # ============================================================
 
-def init_spark(driver_memory: str) -> SparkSession:
-    """初始化 Spark Session，自动适配 Windows / Linux 平台 + Java 17+"""
+def init_spark(driver_memory: str, data_dir: str = "") -> SparkSession:
+    """初始化 Spark Session，自动适配 Windows / Linux 平台 + Java 17+ + 数据集规模"""
     # 确保 PySpark 使用当前虚拟环境的 Python（避免 Python worker 连接超时）
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
     os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
@@ -77,11 +77,14 @@ def init_spark(driver_memory: str) -> SparkSession:
     if "HADOOP_USER_NAME" not in os.environ:
         os.environ["HADOOP_USER_NAME"] = os.environ.get("USERNAME", os.environ.get("USER", "hadoop"))
 
+    # 数据集规模自适应：25M 需要更多分区
+    partitions = 200 if "25m" in data_dir.lower() else 16
+
     builder = (
         SparkSession.builder.appName("MovieRec_ALS")
         .config("spark.driver.memory", driver_memory)
-        .config("spark.sql.shuffle.partitions", "16")
-        .config("spark.default.parallelism", "16")
+        .config("spark.sql.shuffle.partitions", str(partitions))
+        .config("spark.default.parallelism", str(partitions))
         .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.driver.extraJavaOptions", jvm_opens)
@@ -607,7 +610,7 @@ def save_outputs(
 def main() -> None:
     args = parse_args()
 
-    spark = init_spark(args.driver_memory)
+    spark = init_spark(args.driver_memory, args.data_dir)
     try:
         # 1. 加载数据
         ratings = load_ratings(spark, args.data_dir)
