@@ -21,7 +21,8 @@ import time
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.ml.recommendation import ALS, ALSModel
 from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.sql.functions import col, explode, count, collect_list, row_number, desc
+from pyspark.sql.functions import col, explode, count, collect_list, collect_set, row_number, desc, udf, concat_ws, split
+from pyspark.sql.types import DoubleType
 from pyspark.sql.window import Window
 from pyspark.mllib.evaluation import RankingMetrics
 
@@ -254,6 +255,72 @@ def compute_ranking_metrics(
 
 
 # ============================================================
+# 基于内容的冷启动推荐
+# ============================================================
+
+_jaccard = udf(
+    lambda a, b: len(set(a.split("|")) & set(b.split("|"))) / max(len(set(a.split("|")) | set(b.split("|"))), 1)
+    if a and b else 0.0,
+    DoubleType(),
+)
+
+
+def recommend_content_based(
+    ratings: DataFrame, movies: DataFrame, top_n: int, cold_threshold: int = 5
+) -> DataFrame:
+    """为冷启动用户（评分 < cold_threshold 条）生成基于电影类型的推荐。
+
+    提取用户所有已评分电影的类型合集作为"口味画像"，
+    计算与每部电影类型的 Jaccard 相似度，排除已评分后取 Top-N。
+    """
+    cold_users = (
+        ratings.groupBy("userId").agg(count("rating").alias("cnt"))
+        .filter(col("cnt") < cold_threshold)
+        .select("userId")
+    )
+    cold_count = cold_users.count()
+    if cold_count == 0:
+        logger.info("无冷启动用户，跳过内容推荐")
+        return None
+
+    logger.info(f"为 {cold_count} 个冷启动用户生成基于内容的推荐...")
+    t0 = time.time()
+
+    # 构建用户口味画像：收集用户所有已评分电影的类型去重集合
+    user_profile = (
+        ratings.join(cold_users, "userId")
+        .join(movies.select("movieId", "genres"), "movieId")
+        .withColumn("genre", explode(split(col("genres"), "\\|")))
+        .groupBy("userId")
+        .agg(concat_ws("|", collect_set("genre")).alias("user_genres"))
+    )
+
+    # Cross join → 计算 Jaccard
+    cross = user_profile.crossJoin(
+        movies.select("movieId", col("genres").alias("movie_genres"))
+    )
+    scored = cross.withColumn("jaccard", _jaccard(col("user_genres"), col("movie_genres")))
+
+    # 排除已评分电影
+    filtered = scored.join(
+        ratings.select("userId", "movieId").distinct(),
+        on=["userId", "movieId"], how="left_anti",
+    )
+
+    # 按 Jaccard 降序取 Top-N
+    window = Window.partitionBy("userId").orderBy(desc("jaccard"))
+    result = (
+        filtered.withColumn("rn", row_number().over(window))
+        .filter(col("rn") <= top_n)
+        .select("userId", "movieId", col("jaccard").alias("predRating"))
+    )
+
+    elapsed = time.time() - t0
+    logger.info(f"内容推荐完成，耗时 {elapsed:.1f}s，共 {result.count()} 条")
+    return result
+
+
+# ============================================================
 # 推荐生成 & 输出
 # ============================================================
 
@@ -353,10 +420,16 @@ def main() -> None:
         # 6. 生成全量推荐
         user_recs_flat = generate_recommendations(model, ratings, args.top_n)
 
+        # 6b. 冷启动用户替换为内容推荐
+        cold_recs = recommend_content_based(ratings, movies, args.top_n)
+        if cold_recs is not None:
+            cold_ids = cold_recs.select("userId").distinct()
+            user_recs_flat = user_recs_flat.join(cold_ids, "userId", "left_anti").unionByName(cold_recs)
+
         # 7. 保存输出
         save_outputs(user_recs_flat, movies, model, args.output_dir)
 
-        logger.info("✅ 全部流程完成！")
+        logger.info("全部流程完成!")
     except Exception:
         logger.error("训练失败", exc_info=True)
         sys.exit(1)
