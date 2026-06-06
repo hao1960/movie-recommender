@@ -50,3 +50,4 @@ Desktop.ini
 
 # Skills / plugins (local dev tools)
 .agents/
+output/*.db
