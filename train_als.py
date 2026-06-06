@@ -62,11 +62,15 @@ def init_spark(driver_memory: str) -> SparkSession:
 # 数据加载
 # ============================================================
 
-def detect_delimiter(data_dir: str) -> str:
-    """根据数据集路径自动检测分隔符：ml-1m → ::, ml-25m → ,"""
+def detect_format(data_dir: str) -> tuple[str, str]:
+    """根据数据集路径自动检测分隔符和编码。
+
+    MovieLens 1M: :: 分隔, ISO-8859-1 编码（法语/德语重音字符）
+    MovieLens 25M: , 分隔, UTF-8 编码
+    """
     if "25m" in data_dir.lower():
-        return ","
-    return "::"
+        return ",", "UTF-8"
+    return "::", "ISO-8859-1"
 
 
 def load_dat_file(
@@ -74,13 +78,14 @@ def load_dat_file(
     filepath: str,
     columns: list[str],
     delimiter: str,
+    encoding: str = "UTF-8",
 ) -> DataFrame:
-    """通用数据加载：分隔符文本文件 → Spark DataFrame"""
+    """通用数据加载：读取编码文本文件，按分隔符解析 → Spark DataFrame"""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"数据文件不存在: {filepath}")
 
     return (
-        spark.read.text(filepath)
+        spark.read.option("charset", encoding).text(filepath)
         .rdd.map(lambda row: row[0].split(delimiter))
         .filter(lambda parts: len(parts) >= len(columns))
         .map(lambda parts: tuple(parts[: len(columns)]))
@@ -90,12 +95,12 @@ def load_dat_file(
 
 def load_ratings(spark: SparkSession, data_dir: str) -> DataFrame:
     """读取评分数据 → (userId, movieId, rating) DataFrame"""
-    delimiter = detect_delimiter(data_dir)
+    delimiter, encoding = detect_format(data_dir)
     for fname in ("ratings.dat", "ratings.csv"):
         path = os.path.join(data_dir, fname)
         if os.path.exists(path):
-            logger.info(f"读取评分数据: {path} (分隔符='{delimiter}')")
-            df = load_dat_file(spark, path, ["userId", "movieId", "rating"], delimiter)
+            logger.info(f"读取评分数据: {path} (分隔符='{delimiter}', 编码={encoding})")
+            df = load_dat_file(spark, path, ["userId", "movieId", "rating"], delimiter, encoding)
             break
     else:
         raise FileNotFoundError(f"在 {data_dir} 中未找到 ratings.dat 或 ratings.csv")
@@ -115,12 +120,12 @@ def load_ratings(spark: SparkSession, data_dir: str) -> DataFrame:
 
 def load_movies(spark: SparkSession, data_dir: str) -> DataFrame:
     """读取电影元数据 → (movieId, title, genres) DataFrame"""
-    delimiter = detect_delimiter(data_dir)
+    delimiter, encoding = detect_format(data_dir)
     for fname in ("movies.dat", "movies.csv"):
         path = os.path.join(data_dir, fname)
         if os.path.exists(path):
-            logger.info(f"读取电影数据: {path} (分隔符='{delimiter}')")
-            df = load_dat_file(spark, path, ["movieId", "title", "genres"], delimiter)
+            logger.info(f"读取电影数据: {path} (分隔符='{delimiter}', 编码={encoding})")
+            df = load_dat_file(spark, path, ["movieId", "title", "genres"], delimiter, encoding)
             break
     else:
         raise FileNotFoundError(f"在 {data_dir} 中未找到 movies.dat 或 movies.csv")
