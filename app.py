@@ -5,18 +5,18 @@
 推荐结果已自动排除用户历史评分的电影，确保推荐内容的发现性。
 
 用法:
-    # Linux / macOS
-    #   source venv/bin/activate
-    #   python3 app.py --port 5000 --recs_dir output/user_recs --movies_dir output/movies
-    #
-    # Windows
-    #   venv\\Scripts\\activate
-    #   python app.py --port 5000 --recs_dir output/user_recs --movies_dir output/movies
+    # 默认启动（仅控制台日志）
+    python app.py --port 5000
+
+    # 启用文件日志（控制台 + 文件，10MB 自动轮转）
+    python app.py --port 5000 --log_file logs/api.log
 """
 import argparse
+import json
 import logging
 import os
 import time
+from logging.handlers import RotatingFileHandler
 
 import pandas as pd
 from flask import Flask, jsonify, request, g, send_from_directory
@@ -84,6 +84,27 @@ def init_data(recs_dir: str, movies_dir: str) -> None:
 # 中间件
 # ============================================================
 
+def _extract_log_context(response) -> str:
+    """从响应中提取业务上下文（userId / movieId / 推荐条数）"""
+    if response.status_code >= 400:
+        return ""
+    try:
+        data = json.loads(response.get_data(as_text=True))
+    except (json.JSONDecodeError, TypeError):
+        return ""
+
+    parts = []
+    if "user_id" in data:
+        parts.append(f"userId={data['user_id']}")
+    if "recommendations" in data:
+        parts.append(f"n={len(data['recommendations'])}")
+    if "movieId" in data and "user_id" not in data:
+        parts.append(f"movieId={data['movieId']}")
+    if "users" in data and "movies" in data:
+        parts.append(f"users={data['users']} movies={data['movies']}")
+    return "  ".join(parts)
+
+
 @app.before_request
 def before_request() -> None:
     g.start_time = time.time()
@@ -91,12 +112,13 @@ def before_request() -> None:
 
 @app.after_request
 def after_request(response):
-    """请求日志：记录 method、path、status、耗时"""
+    """结构化请求日志：method、path、status、耗时 + 业务上下文"""
     elapsed = (time.time() - g.start_time) * 1000
-    logger.info(
-        f"{request.method} {request.path} → {response.status_code} "
-        f"({elapsed:.1f}ms)"
-    )
+    ctx = _extract_log_context(response)
+    entry = f"{request.method} {request.path} → {response.status_code} ({elapsed:.1f}ms)"
+    if ctx:
+        entry += f"  [{ctx}]"
+    logger.info(entry)
     return response
 
 
@@ -165,7 +187,20 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=5000, help="服务端口")
     parser.add_argument("--recs_dir", default="output/user_recs", help="推荐结果目录")
     parser.add_argument("--movies_dir", default="output/movies", help="电影映射目录")
+    parser.add_argument("--log_file", default=None, help="日志文件路径（10MB 自动轮转，保留 3 个备份）")
     args = parser.parse_args()
+
+    # 文件日志
+    if args.log_file:
+        os.makedirs(os.path.dirname(args.log_file) or ".", exist_ok=True)
+        fh = RotatingFileHandler(
+            args.log_file, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        fh.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+        logger.addHandler(fh)
+        logger.info(f"日志文件: {os.path.abspath(args.log_file)}")
 
     init_data(args.recs_dir, args.movies_dir)
     logger.info(f"启动服务: http://0.0.0.0:{args.port}")
