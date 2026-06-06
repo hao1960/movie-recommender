@@ -162,6 +162,8 @@ def load_ratings(spark: SparkSession, data_dir: str) -> DataFrame:
         col("userId").cast("int"),
         col("movieId").cast("int"),
         col("rating").cast("float"),
+    ).filter(
+        col("userId").isNotNull() & col("movieId").isNotNull()
     )
     df.cache()
     n_users = df.select("userId").distinct().count()
