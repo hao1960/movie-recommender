@@ -60,13 +60,23 @@ def parse_args() -> argparse.Namespace:
 # ============================================================
 
 def init_spark(driver_memory: str) -> SparkSession:
-    """初始化 Spark Session，自动适配 Windows / Linux 平台"""
+    """初始化 Spark Session，自动适配 Windows / Linux 平台 + Java 17+"""
+    # Java 17+ 模块系统兼容：Spark 3.4.1 需要开放内部模块访问
+    jvm_opens = (
+        "--add-opens=java.base/java.lang=ALL-UNNAMED "
+        "--add-opens=java.base/java.util=ALL-UNNAMED "
+        "--add-opens=java.base/sun.security.action=ALL-UNNAMED "
+        "--add-opens=java.base/javax.security.auth=ALL-UNNAMED"
+    )
+
     builder = (
         SparkSession.builder.appName("MovieRec_ALS")
         .config("spark.driver.memory", driver_memory)
         .config("spark.sql.shuffle.partitions", "16")
         .config("spark.default.parallelism", "16")
         .config("spark.driver.bindAddress", "127.0.0.1")
+        .config("spark.driver.extraJavaOptions", jvm_opens)
+        .config("spark.executor.extraJavaOptions", jvm_opens)
     )
 
     if sys.platform == "win32":
