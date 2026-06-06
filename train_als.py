@@ -69,6 +69,10 @@ def init_spark(driver_memory: str) -> SparkSession:
         "--add-opens=java.base/javax.security.auth=ALL-UNNAMED"
     )
 
+    # Java 17+ 绕过 Hadoop UserGroupInformation.getSubject() 调用
+    if "HADOOP_USER_NAME" not in os.environ:
+        os.environ["HADOOP_USER_NAME"] = os.environ.get("USERNAME", os.environ.get("USER", "hadoop"))
+
     builder = (
         SparkSession.builder.appName("MovieRec_ALS")
         .config("spark.driver.memory", driver_memory)

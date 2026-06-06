@@ -36,13 +36,35 @@ def preflight_check(args: argparse.Namespace) -> None:
             "  Linux:    source venv/bin/activate && pip install -r requirements.txt"
         )
 
-    # 2. Java
-    if shutil.which("java") is None:
+    # 2. Java 版本检查（Spark 3.4.1 仅兼容 Java 8/11）
+    java_path = shutil.which("java")
+    if java_path is None:
         errors.append(
-            "未找到 java。Spark 需要 Java 8/11/17。\n"
+            "未找到 java。Spark 需要 Java 8（推荐）或 Java 11。\n"
             "  Windows: 安装 Adoptium Temurin 8 并确保 java 在 PATH 中\n"
             "  Linux:   sudo apt install openjdk-8-jdk -y"
         )
+    else:
+        try:
+            ver = subprocess.run(
+                [java_path, "-version"], capture_output=True, text=True
+            )
+            output = ver.stderr or ver.stdout
+            # 解析版本号: 'version "25.0.2"' → 25
+            import re
+            m = re.search(r'version "(\d+)', output)
+            if m:
+                major = int(m.group(1))
+                if major >= 17:
+                    errors.append(
+                        f"Java {major} 不兼容 Spark 3.4.1（仅支持 Java 8/11）。\n"
+                        "请安装 Java 8 并设置 JAVA_HOME 指向它:\n"
+                        "  winget install EclipseAdoptium.Temurin.8.JDK\n"
+                        "  然后设置环境变量: JAVA_HOME=C:\\Program Files\\Eclipse Adoptium\\jdk-8.0.xxx\\\n"
+                        "  (Java 8 和你的 Java 25 可以并存，互不影响)"
+                    )
+        except Exception:
+            pass
 
     # 3. 训练产出（跳过训练时必须有）
     if args.skip_train:
