@@ -21,7 +21,8 @@ import time
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.ml.recommendation import ALS, ALSModel
 from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.sql.functions import col, explode, count, collect_list
+from pyspark.sql.functions import col, explode, count, collect_list, row_number, desc
+from pyspark.sql.window import Window
 from pyspark.mllib.evaluation import RankingMetrics
 
 # ---------- 日志配置 ----------
@@ -257,12 +258,22 @@ def compute_ranking_metrics(
 # ============================================================
 
 def generate_recommendations(
-    model: ALSModel, top_n: int
+    model: ALSModel, ratings: DataFrame, top_n: int
 ) -> DataFrame:
-    """为所有用户生成 Top-N 推荐，展开嵌套为扁平表"""
-    logger.info(f"为所有用户生成 Top-{top_n} 推荐...")
+    """为所有用户生成 Top-N 推荐，排除已评分电影。
+
+    先多取一些候选（top_n * 3），过滤掉已评分电影后截断到 top_n，
+    确保即使用户看过较多电影也不会推荐不足。
+    """
+    logger.info(f"为所有用户生成 Top-{top_n} 推荐（排除已评分电影）...")
     t0 = time.time()
-    user_recs = model.recommendForAllUsers(top_n)
+
+    # 用户已评分的电影（去重）
+    rated = ratings.select("userId", "movieId").distinct()
+
+    # 多取候选，为过滤留余量
+    fetch_n = top_n * 3
+    user_recs = model.recommendForAllUsers(fetch_n)
 
     flat = user_recs.select(
         "userId", explode("recommendations").alias("rec")
@@ -271,9 +282,22 @@ def generate_recommendations(
         col("rec.movieId").alias("movieId"),
         col("rec.rating").alias("predRating"),
     )
+
+    # 排除已评分电影（left anti join）
+    filtered = flat.join(rated, on=["userId", "movieId"], how="left_anti")
+
+    # 按预测评分降序，每用户截断到 top_n
+    window = Window.partitionBy("userId").orderBy(desc("predRating"))
+    result = (
+        filtered
+        .withColumn("rn", row_number().over(window))
+        .filter(col("rn") <= top_n)
+        .drop("rn")
+    )
+
     elapsed = time.time() - t0
     logger.info(f"推荐生成完成，耗时 {elapsed:.1f}s")
-    return flat
+    return result
 
 
 def save_outputs(
@@ -327,7 +351,7 @@ def main() -> None:
         compute_ranking_metrics(model, test, k=args.top_n)
 
         # 6. 生成全量推荐
-        user_recs_flat = generate_recommendations(model, args.top_n)
+        user_recs_flat = generate_recommendations(model, ratings, args.top_n)
 
         # 7. 保存输出
         save_outputs(user_recs_flat, movies, model, args.output_dir)

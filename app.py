@@ -2,6 +2,8 @@
 推荐系统 REST API 服务（跨平台：Windows / Linux / macOS）
 启动时加载离线训练产出的 CSV 到内存，提供 kv 查询接口。
 
+推荐结果已自动排除用户历史评分的电影，确保推荐内容的发现性。
+
 用法:
     # Linux / macOS
     #   source venv/bin/activate
