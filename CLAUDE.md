@@ -50,7 +50,8 @@ movie-recommender/
 │   └── als_model/       # ALS 模型 Parquet
 ├── train_als.py         # 离线训练脚本（实现代码见 design.md §4）
 ├── app.py               # Flask API 服务（实现代码见 design.md §5）
-├── download_data.py     # 一键下载数据集脚本（跨平台，推荐）
+├── run_all.py           # 一键运行全流程：下载 → 训练 → 启动
+├── download_data.py     # 数据集下载（跨平台 Python，推荐使用）
 ├── download_data.sh      # 一键下载数据集脚本（Linux 备选）
 ├── requirements.txt     # Python 依赖
 ├── tests/               # pytest 集成测试
@@ -124,8 +125,16 @@ python download_data.py
 
 ### 开发流程
 1. 先用 ml-1m 数据集跑通全流程（训练 ~2-5 分钟）
+   ```bash
+   python run_all.py                          # 一键: 下载 → 训练 → 启动
+   python run_all.py --tune                   # 超参数调优
+   python run_all.py --hybrid --alpha 0.7     # 混合推荐
+   ```
 2. 验证通过后再换 ml-25m（训练 ~15-30 分钟）
-3. 每次改动后立即用 curl 验证 API 端点（Windows 可用 `curl.exe` 或 PowerShell `Invoke-WebRequest`）
+   ```bash
+   python run_all.py --dataset ml-25m         # 自动 SQLite + 4g 内存
+   ```
+3. 每次改动后立即用 curl 或 pytest 验证 API 端点
 4. 遇到问题先查 design.md §8 排错表
 
 ### Git 约定

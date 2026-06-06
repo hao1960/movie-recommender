@@ -159,6 +159,23 @@ curl http://localhost:5000/health
 
 全部返回有效 JSON 即为成功。
 
+### 一键运行
+
+以上 8 步可以简化为一条命令：
+
+```bash
+# 下载 → 训练 → 启动 全自动
+python run_all.py
+
+# 其他模式
+python run_all.py --tune                    # 超参数调优
+python run_all.py --hybrid --alpha 0.7      # 混合推荐
+python run_all.py --dataset ml-25m          # 25M 数据集（自动 SQLite）
+python run_all.py --skip-download --skip-train --port 8080  # 只启动服务
+```
+
+每一步失败自动停止并报错，成功则继续下一步。
+
 ---
 
 ## 项目结构
@@ -181,6 +198,7 @@ curl http://localhost:5000/health
 ├── venv/                         # Python 虚拟环境（不提交）
 ├── train_als.py                  # 离线训练脚本（实现见 design.md §4）
 ├── app.py                        # Flask API 服务（实现见 design.md §5）
+├── run_all.py                    # 一键运行：下载 → 训练 → 启动
 ├── download_data.py              # 一键下载数据集（跨平台，推荐）
 ├── requirements.txt              # Python 依赖列表
 ├── CLAUDE.md                     # 项目架构与开发指南

@@ -212,6 +212,13 @@ curl http://localhost:5000/health
 
 ## Phase 5：优化与扩展
 
+> **推荐方式**：使用 `run_all.py` 一键串联，以下每条对应一个参数组合。
+> ```bash
+> python run_all.py --tune                     # 5.1 超参数调优
+> python run_all.py --hybrid --alpha 0.7       # 5.3 混合推荐
+> python run_all.py --dataset ml-25m           # 5.4 25M + SQLite
+> ```
+
 ### 5.1 超参数调优（已实现）
 
 ```bash
