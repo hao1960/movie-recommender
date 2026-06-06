@@ -92,6 +92,11 @@ def init_spark(driver_memory: str) -> SparkSession:
         # Windows: Hadoop 默认使用 /tmp 和 POSIX 权限，需要重定向到合法路径
         import tempfile
         win_tmp = tempfile.gettempdir()
+        # 确保 Hadoop native library 可加载（winutils.exe / hadoop.dll）
+        hadoop_home = os.environ.get("HADOOP_HOME", "")
+        hadoop_bin = os.path.join(hadoop_home, "bin") if hadoop_home else ""
+        if hadoop_bin and os.path.isdir(hadoop_bin):
+            os.environ["PATH"] = hadoop_bin + os.pathsep + os.environ.get("PATH", "")
         builder = (
             builder
             .config("spark.sql.warehouse.dir", "file:///" + win_tmp.replace("\\", "/") + "/spark-warehouse")
