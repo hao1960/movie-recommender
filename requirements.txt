@@ -4,6 +4,9 @@ pandas==2.0.3
 numpy==1.24.3
 flask==2.3.0
 
+# Dev / test
+pytest==8.2.0
+
 # Optional: for HTML frontend CORS support
 # flask-cors==4.0.0
 
