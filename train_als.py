@@ -1,16 +1,17 @@
 """
 离线 ALS 训练脚本（跨平台：Windows / Linux / macOS）
 支持 MovieLens 1M（:: 分隔）和 25M（逗号分隔）数据集，自动检测格式。
+冷启动用户自动使用基于内容的推荐，评估包含 RMSE/P@K/R@K/NDCG@K/Coverage/Diversity。
 
 用法:
-    # Linux / macOS
-    #   source venv/bin/activate
-    #   python3 train_als.py --data_dir data/ml-1m --output_dir output --rank 50 --max_iter 15
-    #
-    # Windows
-    #   venv\\Scripts\\activate
-    #   python train_als.py --data_dir data/ml-1m --output_dir output --rank 50 --max_iter 15
-    #   python train_als.py --data_dir data/ml-25m --output_dir output --rank 50 --max_iter 15 --driver_memory 4g
+    # 默认参数训练
+    python train_als.py --data_dir data/ml-1m --output_dir output --rank 50 --max_iter 15
+
+    # 超参数网格搜索
+    python train_als.py --data_dir data/ml-1m --tune
+
+    # 25M 数据集
+    python train_als.py --data_dir data/ml-25m --driver_memory 4g
 """
 import argparse
 import logging
@@ -21,7 +22,7 @@ import time
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.ml.recommendation import ALS, ALSModel
 from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.sql.functions import col, explode, count, collect_list, collect_set, row_number, desc, udf, concat_ws, split
+from pyspark.sql.functions import col, explode, count, collect_list, collect_set, row_number, desc, udf, concat_ws, split, avg
 from pyspark.sql.types import DoubleType
 from pyspark.sql.window import Window
 from pyspark.mllib.evaluation import RankingMetrics
@@ -48,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reg_param", type=float, default=0.1, help="ALS 正则化参数")
     parser.add_argument("--top_n", type=int, default=10, help="为每个用户推荐 Top-N")
     parser.add_argument("--driver_memory", default="2g", help="Spark driver 内存")
+    parser.add_argument("--tune", action="store_true", help="启用超参数网格搜索（CrossValidator）")
     return parser.parse_args()
 
 
@@ -200,6 +202,59 @@ def train_als(train: DataFrame, args: argparse.Namespace) -> ALSModel:
     return model
 
 
+def tune_hyperparams(train: DataFrame, folds: int = 3) -> ALSModel:
+    """使用交叉验证搜索最优 ALS 超参数。
+
+    搜索空间: rank ∈ {10, 30, 50}, regParam ∈ {0.01, 0.1, 0.5}, maxIter ∈ {10, 15}
+    评估指标: RMSE
+    """
+    from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
+
+    als = ALS(
+        userCol="userId", itemCol="movieId", ratingCol="rating",
+        coldStartStrategy="drop", seed=42, nonnegative=True, implicitPrefs=False,
+    )
+
+    param_grid = (
+        ParamGridBuilder()
+        .addGrid(als.rank, [10, 30, 50])
+        .addGrid(als.regParam, [0.01, 0.1, 0.5])
+        .addGrid(als.maxIter, [10, 15])
+        .build()
+    )
+
+    evaluator = RegressionEvaluator(
+        metricName="rmse", labelCol="rating", predictionCol="prediction"
+    )
+
+    cv = CrossValidator(
+        estimator=als, estimatorParamMaps=param_grid, evaluator=evaluator,
+        numFolds=folds, seed=42, parallelism=4,
+    )
+
+    logger.info(f"开始超参数网格搜索（{len(param_grid)} 组 × {folds} 折）...")
+    t0 = time.time()
+    cv_model = cv.fit(train)
+    elapsed = time.time() - t0
+
+    best = cv_model.bestModel
+    best_reg = best._java_obj.parent().getRegParam()
+    best_iter = best._java_obj.parent().getMaxIter()
+    logger.info(f"网格搜索完成，耗时 {elapsed:.1f}s")
+    logger.info(f"最佳参数: rank={best.rank}, regParam={best_reg:.4f}, maxIter={best_iter}")
+
+    # 打印所有参数组合的平均 RMSE
+    logger.info("参数组合评估结果:")
+    for i, params in enumerate(cv_model.getEstimatorParamMaps()):
+        logger.info(
+            f"  [{i+1}/{len(param_grid)}] rank={params[als.rank]}, "
+            f"regParam={params[als.regParam]}, maxIter={params[als.maxIter]} → "
+            f"avg RMSE={cv_model.avgMetrics[i]:.4f}"
+        )
+
+    return best
+
+
 # ============================================================
 # 模型评估
 # ============================================================
@@ -252,6 +307,43 @@ def compute_ranking_metrics(
     ndcg = metrics.ndcgAt(k)
     logger.info(f"Precision@{k}={p:.4f}  Recall@{k}={r:.4f}  NDCG@{k}={ndcg:.4f}")
     return p, r, ndcg
+
+
+def compute_coverage_diversity(
+    recs: DataFrame, movies: DataFrame, top_n: int
+) -> tuple[float, float]:
+    """计算推荐覆盖率与列表内多样性。
+
+    Coverage: 被推荐到的不同电影数 / 总电影数（越高越好，范围 0-100%）
+    Intra-list Diversity: 每个用户推荐列表中所有电影对的平均 (1 - Jaccard)，
+                          越高表示推荐列表内电影类型差异越大（范围 0-1）
+    """
+    total_movies = movies.count()
+    recommended_movies = recs.select("movieId").distinct().count()
+    coverage = recommended_movies / max(total_movies, 1) * 100
+
+    # 推荐列表去重（取每用户 top_n 条，已由上游保证）
+    recs_genre = recs.join(
+        movies.select("movieId", col("genres").alias("g1")), "movieId"
+    )
+
+    # Self-join：每用户推荐列表内所有 movieId_a < movieId_b 的电影对
+    pairs = (
+        recs_genre.alias("a")
+        .join(recs_genre.alias("b"), on="userId")
+        .filter(col("a.movieId") < col("b.movieId"))
+    )
+
+    # 每对电影的 Jaccard 距离 = 1 - Jaccard 相似度
+    pairs_with_dist = pairs.withColumn(
+        "jaccard_dist", 1.0 - _jaccard(col("a.g1"), col("b.g1"))
+    )
+
+    row = pairs_with_dist.select(avg("jaccard_dist")).first()
+    diversity = row[0] if row and row[0] is not None else 0.0
+
+    logger.info(f"Coverage = {coverage:.2f}%  Intra-list Diversity = {diversity:.4f}")
+    return coverage, diversity
 
 
 # ============================================================
@@ -410,8 +502,11 @@ def main() -> None:
         train, test = ratings.randomSplit([0.8, 0.2], seed=42)
         logger.info("训练集/测试集划分: 80%/20%")
 
-        # 4. 训练 ALS
-        model = train_als(train, args)
+        # 4. 训练 ALS（可选超参数调优）
+        if args.tune:
+            model = tune_hyperparams(train)
+        else:
+            model = train_als(train, args)
 
         # 5. 评估
         evaluate_model(model, test)
@@ -425,6 +520,9 @@ def main() -> None:
         if cold_recs is not None:
             cold_ids = cold_recs.select("userId").distinct()
             user_recs_flat = user_recs_flat.join(cold_ids, "userId", "left_anti").unionByName(cold_recs)
+
+        # 6c. Coverage / Diversity 评估
+        compute_coverage_diversity(user_recs_flat, movies, args.top_n)
 
         # 7. 保存输出
         save_outputs(user_recs_flat, movies, model, args.output_dir)
