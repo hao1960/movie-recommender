@@ -1,14 +1,14 @@
 # Core dependencies
 pyspark==3.4.1
-pandas==2.0.3
-numpy==1.24.3
-flask==2.3.0
+pandas>=2.1.4
+numpy>=1.26.0
+flask>=2.3.0
 
 # Dev / test
-pytest==8.2.0
+pytest>=8.0
 
 # Optional: for HTML frontend CORS support
-# flask-cors==4.0.0
+# flask-cors>=4.0.0
 
 # Optional: for production WSGI server
-# gunicorn==21.2.0
+# gunicorn>=21.2.0
