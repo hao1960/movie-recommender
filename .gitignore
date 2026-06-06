@@ -46,3 +46,6 @@ Thumbs.db
 # Environment / secrets
 .env
 *.log
+
+# Skills / plugins (local dev tools)
+.agents/

@@ -12,7 +12,7 @@ import os
 import time
 
 import pandas as pd
-from flask import Flask, jsonify, request, g
+from flask import Flask, jsonify, request, g, send_from_directory
 
 # ---------- 日志配置 ----------
 logging.basicConfig(
@@ -98,30 +98,9 @@ def after_request(response):
 # ============================================================
 
 @app.route("/")
-def home() -> str:
-    return """<!DOCTYPE html>
-<html lang="zh">
-<head>
-    <meta charset="UTF-8">
-    <title>Movie Recommender API</title>
-    <style>
-        body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; }
-        h2 { color: #333; }
-        a { color: #2563eb; text-decoration: none; }
-        li { margin: 8px 0; }
-        code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
-    </style>
-</head>
-<body>
-    <h2>Movie Recommender API</h2>
-    <ul>
-        <li><a href="/recommend/1"><code>GET /recommend/1</code></a> — 用户 1 的推荐</li>
-        <li><a href="/recommend/1?limit=5"><code>GET /recommend/1?limit=5</code></a> — Top-5 推荐</li>
-        <li><a href="/movie/1193"><code>GET /movie/1193</code></a> — 电影详情</li>
-        <li><a href="/health"><code>GET /health</code></a> — 服务状态</li>
-    </ul>
-</body>
-</html>"""
+def home():
+    """返回前端推荐展示页面"""
+    return send_from_directory("static", "index.html")
 
 
 @app.route("/recommend/<int:user_id>")
