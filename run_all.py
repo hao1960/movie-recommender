@@ -57,11 +57,13 @@ def preflight_check(args: argparse.Namespace) -> None:
                 major = int(m.group(1))
                 if major >= 17:
                     errors.append(
-                        f"Java {major} 不兼容 Spark 3.4.1（仅支持 Java 8/11）。\n"
-                        "请安装 Java 8 并设置 JAVA_HOME 指向它:\n"
-                        "  winget install EclipseAdoptium.Temurin.8.JDK\n"
-                        "  然后设置环境变量: JAVA_HOME=C:\\Program Files\\Eclipse Adoptium\\jdk-8.0.xxx\\\n"
-                        "  (Java 8 和你的 Java 25 可以并存，互不影响)"
+                        f"当前 Java {major} 不兼容 Spark 3.4.1（仅支持 Java 8/11）。\n"
+                        "请安装 Java 8 并设置 JAVA_HOME:\n"
+                        "  1. 下载 Adoptium Temurin 8 .zip: https://adoptium.net/download/\n"
+                        "  2. 解压到你的 JDK 目录（如 E:\\java_devlop\\jdk8）\n"
+                        "  3. 设置环境变量:\n"
+                        "     PowerShell:  $env:JAVA_HOME = \"E:\\java_devlop\\jdk8\"\n"
+                        "     永久设置:    setx JAVA_HOME \"E:\\java_devlop\\jdk8\""
                     )
         except Exception:
             pass
