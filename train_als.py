@@ -22,7 +22,7 @@ import time
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.ml.recommendation import ALS, ALSModel
 from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.sql.functions import col, explode, count, collect_list, collect_set, row_number, desc, udf, concat_ws, split, avg, min as spark_min, max as spark_max, when
+from pyspark.sql.functions import col, explode, count, collect_list, collect_set, row_number, desc, udf, concat_ws, split, size, avg, min as spark_min, max as spark_max, when
 from pyspark.sql.types import DoubleType
 from pyspark.sql.window import Window
 from pyspark.mllib.evaluation import RankingMetrics
@@ -136,17 +136,20 @@ def load_dat_file(
     delimiter: str,
     encoding: str = "UTF-8",
 ) -> DataFrame:
-    """通用数据加载：读取编码文本文件，按分隔符解析 → Spark DataFrame"""
+    """通用数据加载：Spark SQL 表达式解析，全程 JVM 内执行，无 Python worker"""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"数据文件不存在: {filepath}")
 
-    return (
+    # 转义正则特殊字符（| 是 split 的正则语法）
+    escaped = delimiter.replace("|", "\\|")
+    df = (
         spark.read.option("charset", encoding).text(filepath)
-        .rdd.map(lambda row: row[0].split(delimiter))
-        .filter(lambda parts: len(parts) >= len(columns))
-        .map(lambda parts: tuple(parts[: len(columns)]))
-        .toDF(columns)
+        .select(split(col("value"), escaped).alias("parts"))
+        .filter(size(col("parts")) >= len(columns))
     )
+    for i, name in enumerate(columns):
+        df = df.withColumn(name, col("parts")[i])
+    return df.select(columns)
 
 
 def load_ratings(spark: SparkSession, data_dir: str) -> DataFrame:
