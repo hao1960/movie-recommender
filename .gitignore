@@ -42,6 +42,7 @@ data/ml-25m/*
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
 
 # Environment / secrets
 .env

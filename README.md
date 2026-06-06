@@ -40,10 +40,10 @@ MovieLens 数据集            Spark ALS 离线训练              Flask API 在
 
 | 组件 | 版本 | 说明 |
 |------|------|------|
-| Ubuntu | 20.04+ | 虚拟机或物理机均可 |
-| Java | 8 | `openjdk-8-jdk`，Spark 3.x 最稳定搭配 |
+| OS | Windows 10+ / Ubuntu 20.04+ / macOS | 跨平台支持 |
+| Java | 8 | OpenJDK 8（Adoptium Temurin 8），Spark 3.x 最稳定搭配 |
 | Spark | 3.4.1 | 预编译 Hadoop 3 版本 |
-| Python | 3.8+ | 系统自带或 `apt install python3` |
+| Python | 3.8+ | Windows: `python`，Linux/macOS: `python3` |
 | 内存 | ≥ 4 GB | 1M 数据集 2 GB 即可，25M 建议 8 GB+ |
 | 磁盘 | ≥ 5 GB | 数据集 + 模型输出 |
 
@@ -55,6 +55,9 @@ MovieLens 数据集            Spark ALS 离线训练              Flask API 在
 
 ### Step 1：安装 Java 8
 
+**Windows**：下载 [Adoptium Temurin 8](https://adoptium.net/download/) 安装，或 `winget install EclipseAdoptium.Temurin.8.JDK`。
+
+**Ubuntu**：
 ```bash
 sudo apt update && sudo apt install openjdk-8-jdk -y
 java -version
@@ -63,6 +66,9 @@ java -version
 
 ### Step 2：安装 Spark
 
+**Windows**：下载 `spark-3.4.1-bin-hadoop3.tgz` 解压到 `C:\spark`，设置系统环境变量 `SPARK_HOME=C:\spark`，PATH 追加 `C:\spark\bin`。还需配置 `HADOOP_HOME` 和 `winutils.exe`（详见 [CLAUDE.md](CLAUDE.md)）。
+
+**Ubuntu**：
 ```bash
 wget https://archive.apache.org/dist/spark/spark-3.4.1/spark-3.4.1-bin-hadoop3.tgz
 sudo tar -xzf spark-3.4.1-bin-hadoop3.tgz -C /opt
@@ -77,16 +83,15 @@ EOF
 
 source ~/.bashrc
 spark-shell --version
-# 预期: Spark 3.4.1 版本信息
 ```
 
 ### Step 3：创建项目并安装 Python 依赖
 
 ```bash
-mkdir -p ~/movie-recommender && cd ~/movie-recommender
-python3 -m venv venv
-source venv/bin/activate
-pip install pyspark==3.4.1 flask==2.3.0 pandas==2.0.3
+# Windows                          # Linux / macOS
+python -m venv venv                python3 -m venv venv
+venv\Scripts\activate              source venv/bin/activate
+pip install -r requirements.txt
 ```
 
 > 验证：进入 `pyspark`，执行 `spark.range(10).show()` 能打印 10 行数据即正常。输入 `exit()` 退出。
@@ -94,12 +99,12 @@ pip install pyspark==3.4.1 flask==2.3.0 pandas==2.0.3
 ### Step 4：下载数据集
 
 ```bash
-# 一键下载 ml-1m + ml-25m 到 data/ 下
-bash download_data.sh
+# 一键下载 ml-1m + ml-25m 到 data/ 下（跨平台 Python 脚本）
+python download_data.py
 # 确认: ls data/ml-1m/ 应看到 ratings.dat, movies.dat, users.dat
 ```
 
-> 默认同时下载两个数据集。如果只想下某一个，可以直接用 `wget` 手动下载，见 [design.md](design.md) §3.1。
+> 默认同时下载两个数据集。如果只想下某一个：`python download_data.py --dataset ml-1m`。也可用 `download_data.sh`（Linux 备选）。
 
 ### Step 5：下载或创建训练脚本
 
@@ -108,7 +113,8 @@ bash download_data.sh
 ### Step 6：运行训练
 
 ```bash
-python3 train_als.py \
+# Windows: python, Linux/macOS: python3
+python train_als.py \
     --data_dir data/ml-1m \
     --output_dir output \
     --rank 50 \
@@ -127,10 +133,8 @@ ls output/als_model/             # 持久化模型
 
 ### Step 7：启动 API 服务
 
-将 `app.py` 放入 `~/movie-recommender/` 目录（代码见 [design.md](design.md) 第五节）。
-
 ```bash
-python3 app.py --port 5000 --recs_dir output/user_recs --movies_dir output/movies
+python app.py --port 5000 --recs_dir output/user_recs --movies_dir output/movies
 ```
 
 ### Step 8：验证 API
@@ -173,6 +177,7 @@ curl http://localhost:5000/health
 ├── venv/                         # Python 虚拟环境（不提交）
 ├── train_als.py                  # 离线训练脚本（实现见 design.md §4）
 ├── app.py                        # Flask API 服务（实现见 design.md §5）
+├── download_data.py              # 一键下载数据集（跨平台，推荐）
 ├── requirements.txt              # Python 依赖列表
 ├── CLAUDE.md                     # 项目架构与开发指南
 ├── .gitignore
@@ -274,12 +279,11 @@ curl http://localhost:5000/health
 ### 切换数据集
 
 ```bash
-# 25M 数据集
-wget https://files.grouplens.org/datasets/movielens/ml-25m.zip
-unzip ml-25m.zip -d data/
+# 下载 25M 数据集
+python download_data.py --dataset ml-25m
 
 # 训练时修改参数
-python3 train_als.py --data_dir data/ml-25m --driver_memory 4g
+python train_als.py --data_dir data/ml-25m --driver_memory 4g
 # 同时需要修改 train_als.py 中 init_spark() 的 shuffle.partitions 为 200
 ```
 
@@ -393,7 +397,7 @@ ratings.dat 使用 :: 分隔，ratings.csv 使用逗号分隔。
 
 ### 重要约定
 
-- **始终激活虚拟环境**：每次新终端先 `source venv/bin/activate`
+- **始终激活虚拟环境**：每次新终端先 `venv\Scripts\activate`（Windows）或 `source venv/bin/activate`（Linux/macOS）
 - **Spark 输出会覆盖**：`output/` 目录使用 `mode="overwrite"`，多次运行仅保留最后一次结果
 - **不要手动创建 `output/`**：Spark 会自动创建，手动创建可能导致权限冲突
 - **Flask 启动前必须先训练**：`app.py` 依赖 `output/user_recs/` 和 `output/movies/`
@@ -404,12 +408,13 @@ ratings.dat 使用 :: 分隔，ratings.csv 使用逗号分隔。
 
 | 现象 | 可能原因 | 解决 |
 |------|---------|------|
-| `java: command not found` | Java 未安装或 PATH 未配置 | `sudo apt install openjdk-8-jdk -y` |
-| `NoClassDefFoundError` | Java 版本不兼容 | `sudo update-alternatives --config java` 选 Java 8 |
+| `java: command not found` | Java 未安装或 PATH 未配置 | 安装 Java 8 并配置 JAVA_HOME |
+| `NoClassDefFoundError` | Java 版本不兼容 | 切换为 Java 8 |
 | `OutOfMemoryError` | Driver 内存不足 | 加 `--driver_memory 4g` 或改用 ml-1m |
-| `FileNotFoundError: part-*.csv` | Flask 启动前未训练 | 先执行 `python3 train_als.py` |
+| `FileNotFoundError: part-*.csv` | Flask 启动前未训练 | 先执行 `python train_als.py` |
 | Flask 返回 404 | 用户 ID 超过数据范围 | ml-1m 用户 ID 范围 1~6040 |
-| Flask 宿主机无法访问 | 监听地址或防火墙 | `host='0.0.0.0'` + `sudo ufw allow 5000` |
+| Windows 上 Spark 报 `winutils.exe` 错误 | 缺少 Hadoop winutils | 下载 winutils.exe 并配置 HADOOP_HOME（见 CLAUDE.md） |
+| `spark.sql.warehouse.dir` 错误 | Windows 上 /tmp 路径无效 | train_als.py 已自动处理，无需手动配置 |
 | 训练脚本报 `split("::")` 索引越界 | `ratings.dat` 文件损坏或有空行 | 重新下载并解压数据集 |
 
 更多排错见 [design.md](design.md) 第八节。

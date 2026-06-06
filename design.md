@@ -5,7 +5,7 @@
 - **目标**：使用 Spark MLlib 的 ALS（Alternating Least Squares）算法，基于 MovieLens 数据集训练协同过滤模型，为每个用户生成 Top-N 电影推荐，并通过 Flask 提供 RESTful API 展示推荐结果。
 - **核心技术栈**：Spark DataFrame / MLlib / ALS 矩阵分解 / Flask
 - **数据源**：MovieLens 1M（约 100 万条评分，6040 用户 × 3706 电影）或 25M（约 2500 万条评分，162000 用户 × 62000 电影）
-- **运行环境**：Ubuntu 20.04+、Java 8、Spark 3.4.1、Python 3.8+
+- **运行环境**：Windows 10+ / Ubuntu 20.04+ / macOS、Java 8、Spark 3.4.1、Python 3.8+
 
 ### 系统架构图
 
@@ -31,12 +31,15 @@
 
 ---
 
-## 二、环境准备（Ubuntu 虚拟机）
+## 二、环境准备
 
 ### 2.1 安装 Java 8
 
 Spark 3.x 运行时要求 Java 8/11/17，推荐 Java 8（最稳定）：
 
+**Windows**：下载 [Adoptium Temurin 8](https://adoptium.net/download/) 安装，或 `winget install EclipseAdoptium.Temurin.8.JDK`。
+
+**Ubuntu**：
 ```bash
 sudo apt update
 sudo apt install openjdk-8-jdk -y
@@ -48,6 +51,12 @@ sudo update-alternatives --config java
 
 ### 2.2 安装 Spark 3.4.1
 
+**Windows**：下载 `spark-3.4.1-bin-hadoop3.tgz` 解压到 `C:\spark`，设置系统环境变量：
+- `SPARK_HOME=C:\spark`，PATH 追加 `%SPARK_HOME%\bin`
+- `HADOOP_HOME=C:\hadoop`
+- 从 [winutils](https://github.com/cdarlint/winutils) 下载 Hadoop 3.2 对应的 `winutils.exe` 放到 `C:\hadoop\bin\`
+
+**Ubuntu**：
 ```bash
 wget https://archive.apache.org/dist/spark/spark-3.4.1/spark-3.4.1-bin-hadoop3.tgz
 sudo tar -xzf spark-3.4.1-bin-hadoop3.tgz -C /opt
@@ -68,18 +77,13 @@ spark-shell --version   # 验证安装
 ### 2.3 创建虚拟环境并安装依赖
 
 ```bash
-sudo apt install python3-pip python3-venv -y
-
-# 创建隔离的虚拟环境
-cd ~/movie-recommender
-python3 -m venv venv
-source venv/bin/activate
-
-# 安装依赖（固定版本号保证可复现）
-pip install pyspark==3.4.1 flask==2.3.0 pandas==2.0.3
+# Windows                          # Linux / macOS
+python -m venv venv                python3 -m venv venv
+venv\Scripts\activate              source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-> **版本锁定说明**：固定主版本号避免后续兼容性问题。若使用 Spark 3.5+，PySpark 版本需对应调整。每次重新打开终端需要执行 `source venv/bin/activate` 激活环境。如需记录依赖快照：`pip freeze > requirements.txt`。
+> **版本锁定说明**：固定主版本号避免后续兼容性问题。若使用 Spark 3.5+，PySpark 版本需对应调整。每次重新打开终端需要激活虚拟环境。如需记录依赖快照：`pip freeze > requirements.txt`。
 
 ---
 
@@ -88,16 +92,14 @@ pip install pyspark==3.4.1 flask==2.3.0 pandas==2.0.3
 ### 3.1 下载 MovieLens
 
 ```bash
-mkdir -p ~/movie-recommender/data && cd ~/movie-recommender
+# 一键下载（跨平台 Python 脚本）
+python download_data.py
 
-# MovieLens 1M（推荐先用此数据集验证流程，训练约 2-5 分钟）
-wget https://files.grouplens.org/datasets/movielens/ml-1m.zip
-unzip ml-1m.zip -d data/
-
-# MovieLens 25M（后期替换，训练约 15-30 分钟）
-# wget https://files.grouplens.org/datasets/movielens/ml-25m.zip
-# unzip ml-25m.zip -d data/
+# 或只下载 ml-1m
+python download_data.py --dataset ml-1m
 ```
+
+> MovieLens 1M 推荐先用此数据集验证流程，训练约 2-5 分钟。25M 训练约 15-30 分钟。
 
 ### 3.2 数据文件结构
 
@@ -386,8 +388,7 @@ if __name__ == "__main__":
 ### 4.2 运行训练
 
 ```bash
-cd ~/movie-recommender
-python3 train_als.py --data_dir data/ml-1m --output_dir output --rank 50 --max_iter 15
+python train_als.py --data_dir data/ml-1m --output_dir output --rank 50 --max_iter 15
 ```
 
 > **预期输出**：RMSE 约 0.83~0.90，Precision@10 / Recall@10 / NDCG@10 等排序指标也会一并打印。rank=50、maxIter=15 是经过权衡的推荐配置——rank 太低欠拟合，太高过拟合且训练变慢。使用 25M 数据集时，建议在 `init_spark` 中增大 `shuffle.partitions` 至 200。
@@ -560,27 +561,23 @@ if __name__ == "__main__":
 
 ```bash
 # 终端 1：启动 Flask
-python3 app.py --port 5000
+python app.py --port 5000
 
-# 终端 2：测试接口
+# 终端 2：测试接口（Windows 可用 curl.exe 或浏览器）
 curl http://localhost:5000/recommend/1
 curl "http://localhost:5000/recommend/1?limit=5"
 curl http://localhost:5000/movie/1193
 curl http://localhost:5000/health
 ```
 
-从宿主机浏览器访问 `http://<虚拟机IP>:5000/recommend/1`。如果无法访问，执行：
-
-```bash
-sudo ufw allow 5000
-```
+浏览器访问 `http://localhost:5000` 打开推荐展示页面。若从其他机器访问，将 `localhost` 替换为服务器 IP，并确保防火墙放行端口 5000。
 
 ---
 
 ## 六、项目目录结构
 
 ```text
-~/movie-recommender/
+movie-recommender/
 ├── data/
 │   ├── ml-1m/                # MovieLens 1M 数据集（:: 分隔符）
 │   │   ├── ratings.dat
@@ -594,8 +591,11 @@ sudo ufw allow 5000
 │   ├── user_recs/            # 用户推荐结果 CSV（part-*.csv）
 │   ├── movies/               # 电影标题/类型映射 CSV
 │   └── als_model/            # ALS 模型持久化（Parquet 格式）
+├── static/                   # 前端静态页面
+│   └── index.html            # 推荐展示页面
 ├── train_als.py              # 离线训练脚本
 ├── app.py                    # Flask 推荐服务
+├── download_data.py          # 数据集下载（跨平台）
 ├── requirements.txt          # Python 依赖
 ├── CLAUDE.md                 # 项目架构与开发指南
 └── design.md                 # 本文档
@@ -688,11 +688,12 @@ ORDER BY user_type;
 
 | 错误现象 | 原因 | 解决办法 |
 |---------|------|----------|
-| `java.lang.NoClassDefFoundError` | Java 版本不兼容 | `sudo update-alternatives --config java` 选择 Java 8 |
+| `java.lang.NoClassDefFoundError` | Java 版本不兼容 | 切换默认 Java 为版本 8 |
 | `OutOfMemoryError: Java heap space` | Driver 内存不足 | 增加 `--driver_memory 4g` 或使用 ml-1m 数据集 |
 | `recommendForAllUsers` 执行过慢 / OOM | 用户或物品数量过多 | 减小 `top_n`；或对用户随机采样先验证流程 |
 | 读取 ratings.dat 列数不对 | 分隔符 `::` 处理不正确 | 确认使用 RDD `split("::")` 而非 CSV reader |
-| Flask 无法从宿主机访问 | 防火墙拦截或监听地址不对 | `host='0.0.0.0'` + `sudo ufw allow 5000` |
+| Windows 上 `winutils.exe` 错误 | Hadoop 缺少 winutils | 下载 winutils.exe 到 `C:\hadoop\bin\`，设置 HADOOP_HOME |
+| Windows 上 `/tmp` 路径错误 | Hadoop 默认 POSIX 路径无效 | train_als.py 已自动处理，`spark.sql.warehouse.dir` 已重定向到 `%TEMP%` |
 | `part-*.csv` 文件加载报错 | 目录中有 `_SUCCESS`、`.crc` 等杂文件 | 过滤只读取 `part-*.csv`（已在 app.py 中处理） |
 
 ---

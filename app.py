@@ -1,10 +1,15 @@
 """
-推荐系统 REST API 服务
+推荐系统 REST API 服务（跨平台：Windows / Linux / macOS）
 启动时加载离线训练产出的 CSV 到内存，提供 kv 查询接口。
 
 用法:
-    source venv/bin/activate
-    python3 app.py --port 5000 --recs_dir output/user_recs --movies_dir output/movies
+    # Linux / macOS
+    #   source venv/bin/activate
+    #   python3 app.py --port 5000 --recs_dir output/user_recs --movies_dir output/movies
+    #
+    # Windows
+    #   venv\\Scripts\\activate
+    #   python app.py --port 5000 --recs_dir output/user_recs --movies_dir output/movies
 """
 import argparse
 import logging

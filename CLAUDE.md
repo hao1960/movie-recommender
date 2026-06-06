@@ -9,7 +9,7 @@
 - **离线训练**: Python 3.8+, PySpark 3.4.1, Spark MLlib ALS
 - **在线服务**: Flask 2.3.0, Pandas 2.0.3
 - **数据源**: MovieLens 1M / 25M
-- **运行环境**: Ubuntu 20.04+, Java 8, ≥4GB RAM
+- **运行环境**: Ubuntu 20.04+ / Windows 10+ / macOS, Java 8, ≥4GB RAM
 
 ## 架构设计
 
@@ -44,7 +44,8 @@ movie-recommender/
 │   └── als_model/       # ALS 模型 Parquet
 ├── train_als.py         # 离线训练脚本（实现代码见 design.md §4）
 ├── app.py               # Flask API 服务（实现代码见 design.md §5）
-├── download_data.sh      # 一键下载数据集脚本
+├── download_data.py     # 一键下载数据集脚本（跨平台，推荐）
+├── download_data.sh      # 一键下载数据集脚本（Linux 备选）
 ├── requirements.txt     # Python 依赖
 ├── design.md            # 详细设计文档（含完整代码、ALS 原理、报告指引）
 ├── workflow.md          # 分阶段开发工作流（含验证标准）
@@ -53,6 +54,34 @@ movie-recommender/
 ```
 
 ## 开发环境搭建
+
+### Windows 11
+
+```bash
+# 1. 安装 Java 8（推荐 OpenJDK 8）
+#    下载 Adoptium Temurin 8: https://adoptium.net/download/
+#    或使用 winget: winget install EclipseAdoptium.Temurin.8.JDK
+java -version  # 确认输出 1.8.0_xxx
+
+# 2. 安装 Spark 3.4.1
+#    下载 spark-3.4.1-bin-hadoop3.tgz，解压到 C:\spark
+#    设置系统环境变量：
+#      SPARK_HOME=C:\spark
+#      HADOOP_HOME=C:\hadoop （需要 winutils.exe，见下文）
+#      PATH 追加 %SPARK_HOME%\bin
+#    winutils.exe 配置：从 https://github.com/cdarlint/winutils 下载
+#      对应 Hadoop 3.2 版本的 winutils.exe 放到 C:\hadoop\bin\
+
+# 3. 创建虚拟环境
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+
+# 4. 下载数据集（一次下载 ml-1m + ml-25m）
+python download_data.py
+```
+
+### Ubuntu 20.04+
 
 ```bash
 # 1. 安装 Java 8
@@ -65,8 +94,8 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-	# 4. 下载数据集（一次下载 ml-1m + ml-25m）
-	bash download_data.sh
+# 4. 下载数据集（一次下载 ml-1m + ml-25m）
+python download_data.py
 ```
 
 ## 开发约定
@@ -85,13 +114,13 @@ pip install -r requirements.txt
 ### 开发流程
 1. 先用 ml-1m 数据集跑通全流程（训练 ~2-5 分钟）
 2. 验证通过后再换 ml-25m（训练 ~15-30 分钟）
-3. 每次改动后立即用 curl 验证 API 端点
+3. 每次改动后立即用 curl 验证 API 端点（Windows 可用 `curl.exe` 或 PowerShell `Invoke-WebRequest`）
 4. 遇到问题先查 design.md §8 排错表
 
 ### Git 约定
 - 不要提交数据集文件（.zip, ratings.dat 等），已在 .gitignore 中排除
 - output/ 下的生成文件不提交，只保留 .gitkeep 占位目录结构
-- 提交前确保 `python3 train_als.py --help` 和 `python3 app.py --help` 能正常运行
+- 提交前确保 `python train_als.py --help` 和 `python app.py --help` 能正常运行
 
 ### 代码风格
 - Python 3.8+ 语法，类型提示可用但非必须

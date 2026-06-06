@@ -18,6 +18,9 @@ Phase 1         Phase 2         Phase 3         Phase 4         Phase 5
 
 ### 1.1 安装 Java 8
 
+**Windows**：下载 [Adoptium Temurin 8](https://adoptium.net/download/) 或 `winget install EclipseAdoptium.Temurin.8.JDK`。
+
+**Ubuntu**：
 ```bash
 sudo apt update && sudo apt install openjdk-8-jdk -y
 java -version  # 必须输出 1.8.0_xxx
@@ -25,6 +28,11 @@ java -version  # 必须输出 1.8.0_xxx
 
 ### 1.2 安装 Spark
 
+**Windows**：下载 spark-3.4.1-bin-hadoop3.tgz 解压到 `C:\spark`，设置系统环境变量：
+- `SPARK_HOME=C:\spark`，PATH 追加 `%SPARK_HOME%\bin`
+- 下载 [winutils.exe](https://github.com/cdarlint/winutils)（Hadoop 3.2 版本）放到 `C:\hadoop\bin\`，设置 `HADOOP_HOME=C:\hadoop`
+
+**Ubuntu**：
 ```bash
 wget https://archive.apache.org/dist/spark/spark-3.4.1/spark-3.4.1-bin-hadoop3.tgz
 sudo tar -xzf spark-3.4.1-bin-hadoop3.tgz -C /opt
@@ -43,10 +51,10 @@ export PYSPARK_PYTHON=python3
 ### 1.3 创建虚拟环境
 
 ```bash
-mkdir -p ~/movie-recommender && cd ~/movie-recommender
-python3 -m venv venv
-source venv/bin/activate
-pip install pyspark==3.4.1 flask==2.3.0 pandas==2.0.3
+# Windows                          # Linux / macOS
+python -m venv venv                python3 -m venv venv
+venv\Scripts\activate              source venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ### 1.4 验证标准
@@ -73,10 +81,10 @@ spark.stop()
 ### 2.1 下载数据
 
 ```bash
-cd ~/movie-recommender
-mkdir -p data
-wget https://files.grouplens.org/datasets/movielens/ml-1m.zip
-unzip ml-1m.zip -d data/
+# 跨平台 Python 脚本
+python download_data.py
+# 或只下载 ml-1m
+python download_data.py --dataset ml-1m
 ```
 
 ### 2.2 实现数据加载函数
@@ -127,7 +135,7 @@ train, test = ratings.randomSplit([0.8, 0.2], seed=42)
 用默认超参数跑第一轮（先验证流程，后调参）：
 
 ```bash
-python3 train_als.py --rank 50 --max_iter 15 --reg_param 0.1
+python train_als.py --rank 50 --max_iter 15 --reg_param 0.1
 ```
 
 ### 3.3 实现评估
@@ -185,7 +193,7 @@ init_data(args.recs_dir, args.movies_dir)
 
 ```bash
 # 终端 1
-python3 app.py --port 5000
+python app.py --port 5000
 
 # 终端 2
 curl http://localhost:5000/recommend/1
@@ -220,7 +228,7 @@ curl http://localhost:5000/health
 
 ```bash
 # 重新训练即可，注意调大 shuffle.partitions
-python3 train_als.py --data_dir data/ml-25m --rank 50 --max_iter 15
+python train_als.py --data_dir data/ml-25m --rank 50 --max_iter 15
 ```
 
 ### 5.4 基于内容的冷启动方案

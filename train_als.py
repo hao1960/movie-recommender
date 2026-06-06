@@ -1,11 +1,16 @@
 """
-离线 ALS 训练脚本
+离线 ALS 训练脚本（跨平台：Windows / Linux / macOS）
 支持 MovieLens 1M（:: 分隔）和 25M（逗号分隔）数据集，自动检测格式。
 
 用法:
-    source venv/bin/activate
-    python3 train_als.py --data_dir data/ml-1m --output_dir output --rank 50 --max_iter 15
-    python3 train_als.py --data_dir data/ml-25m --output_dir output --rank 50 --max_iter 15 --driver_memory 4g
+    # Linux / macOS
+    #   source venv/bin/activate
+    #   python3 train_als.py --data_dir data/ml-1m --output_dir output --rank 50 --max_iter 15
+    #
+    # Windows
+    #   venv\\Scripts\\activate
+    #   python train_als.py --data_dir data/ml-1m --output_dir output --rank 50 --max_iter 15
+    #   python train_als.py --data_dir data/ml-25m --output_dir output --rank 50 --max_iter 15 --driver_memory 4g
 """
 import argparse
 import logging
@@ -49,13 +54,28 @@ def parse_args() -> argparse.Namespace:
 # ============================================================
 
 def init_spark(driver_memory: str) -> SparkSession:
-    return (
+    """初始化 Spark Session，自动适配 Windows / Linux 平台"""
+    builder = (
         SparkSession.builder.appName("MovieRec_ALS")
         .config("spark.driver.memory", driver_memory)
         .config("spark.sql.shuffle.partitions", "16")
         .config("spark.default.parallelism", "16")
-        .getOrCreate()
+        .config("spark.driver.bindAddress", "127.0.0.1")
     )
+
+    if sys.platform == "win32":
+        # Windows: Hadoop 默认使用 /tmp 和 POSIX 权限，需要重定向到合法路径
+        import tempfile
+        win_tmp = "file:///" + tempfile.gettempdir().replace("\\", "/").lstrip("/")
+        builder = (
+            builder
+            .config("spark.sql.warehouse.dir", win_tmp + "/spark-warehouse")
+            .config("spark.local.dir", win_tmp + "/spark-tmp")
+            .config("spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version", "2")
+        )
+        logger.info("检测到 Windows 平台，已配置 Hadoop 兼容路径")
+
+    return builder.getOrCreate()
 
 
 # ============================================================
