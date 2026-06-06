@@ -22,7 +22,7 @@ import time
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.ml.recommendation import ALS, ALSModel
 from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.sql.functions import col, explode, count, collect_list, collect_set, row_number, desc, udf, concat_ws, split, avg
+from pyspark.sql.functions import col, explode, count, collect_list, collect_set, row_number, desc, udf, concat_ws, split, avg, min as spark_min, max as spark_max, when
 from pyspark.sql.types import DoubleType
 from pyspark.sql.window import Window
 from pyspark.mllib.evaluation import RankingMetrics
@@ -50,6 +50,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top_n", type=int, default=10, help="为每个用户推荐 Top-N")
     parser.add_argument("--driver_memory", default="2g", help="Spark driver 内存")
     parser.add_argument("--tune", action="store_true", help="启用超参数网格搜索（CrossValidator）")
+    parser.add_argument("--hybrid", action="store_true", help="启用混合推荐（ALS + 内容相似度加权融合）")
+    parser.add_argument("--alpha", type=float, default=0.7, help="混合推荐中 ALS 权重（0-1），默认 0.7")
     return parser.parse_args()
 
 
@@ -412,6 +414,93 @@ def recommend_content_based(
     return result
 
 
+def recommend_hybrid(
+    model: ALSModel, ratings: DataFrame, movies: DataFrame, top_n: int, alpha: float = 0.7
+) -> DataFrame:
+    """混合推荐：在 ALS 候选池内按内容相似度加权重排序。
+
+    1. 取 ALS top_n*5 候选池（排除已评分）
+    2. 为每部候选电影计算与用户口味画像的 Jaccard 相似度
+    3. 两个分数各自 min-max 归一化到 [0,1]
+    4. hybrid_score = α×norm_als + (1-α)×norm_content
+    5. 重新排序取 top_n
+
+    冷启动用户（评分 <5 条）跳过混合，仍用纯内容推荐。
+    """
+    rated = ratings.select("userId", "movieId").distinct()
+    fetch_n = top_n * 5
+
+    # 区分暖/冷用户
+    user_cnt = ratings.groupBy("userId").agg(count("rating").alias("cnt")).cache()
+    cold_ids = user_cnt.filter(col("cnt") < 5).select("userId")
+    warm_ids = user_cnt.filter(col("cnt") >= 5).select("userId")
+    cold_count = cold_ids.count()
+    warm_count = warm_ids.count()
+    user_cnt.unpersist()
+    logger.info(f"混合推荐: {warm_count} 暖用户 (ALS+Content), {cold_count} 冷用户 (纯Content)")
+
+    # 1. 暖用户的 ALS 候选池
+    als_pool = (
+        model.recommendForAllUsers(fetch_n)
+        .select("userId", explode("recommendations").alias("rec"))
+        .select(
+            "userId",
+            col("rec.movieId").alias("movieId"),
+            col("rec.rating").alias("als_score"),
+        )
+        .join(warm_ids, "userId")
+        .join(rated, ["userId", "movieId"], "left_anti")
+    )
+
+    # 2. 用户口味画像（所有用户）
+    t0 = time.time()
+    user_profile = (
+        ratings.join(movies.select("movieId", "genres"), "movieId")
+        .withColumn("genre", explode(split(col("genres"), "\\|")))
+        .groupBy("userId")
+        .agg(concat_ws("|", collect_set("genre")).alias("user_genres"))
+    )
+
+    # 3. 为 ALS 候选池附加内容分数
+    pool = (
+        als_pool
+        .join(user_profile, "userId")
+        .join(movies.select("movieId", col("genres").alias("m_genres")), "movieId")
+        .withColumn("content_score", _jaccard(col("user_genres"), col("m_genres")))
+        .drop("user_genres", "m_genres")
+    )
+
+    # 4. 每用户内 min-max 归一化 + 加权
+    stats = pool.groupBy("userId").agg(
+        spark_min("als_score").alias("als_min"), spark_max("als_score").alias("als_max"),
+        spark_min("content_score").alias("c_min"), spark_max("content_score").alias("c_max"),
+    )
+    normed = pool.join(stats, "userId").withColumn(
+        "hybrid_score",
+        alpha * (col("als_score") - col("als_min")) / (col("als_max") - col("als_min") + 1e-9)
+        + (1 - alpha) * (col("content_score") - col("c_min")) / (col("c_max") - col("c_min") + 1e-9),
+    )
+
+    # 5. 重新排序 → 暖用户混合推荐结果
+    window = Window.partitionBy("userId").orderBy(desc("hybrid_score"))
+    warm_recs = (
+        normed.withColumn("rn", row_number().over(window))
+        .filter(col("rn") <= top_n)
+        .select("userId", "movieId", col("hybrid_score").alias("predRating"))
+    )
+
+    # 6. 冷启动用户使用纯内容推荐
+    if cold_count > 0:
+        cold_recs = recommend_content_based(ratings, movies, top_n)
+        result = warm_recs.unionByName(cold_recs) if cold_recs is not None else warm_recs
+    else:
+        result = warm_recs
+
+    elapsed = time.time() - t0
+    logger.info(f"混合推荐完成，耗时 {elapsed:.1f}s（α={alpha}）")
+    return result
+
+
 # ============================================================
 # 推荐生成 & 输出
 # ============================================================
@@ -513,15 +602,17 @@ def main() -> None:
         compute_ranking_metrics(model, test, k=args.top_n)
 
         # 6. 生成全量推荐
-        user_recs_flat = generate_recommendations(model, ratings, args.top_n)
+        if args.hybrid:
+            user_recs_flat = recommend_hybrid(model, ratings, movies, args.top_n, args.alpha)
+        else:
+            user_recs_flat = generate_recommendations(model, ratings, args.top_n)
+            # 冷启动用户替换为内容推荐
+            cold_recs = recommend_content_based(ratings, movies, args.top_n)
+            if cold_recs is not None:
+                cold_ids = cold_recs.select("userId").distinct()
+                user_recs_flat = user_recs_flat.join(cold_ids, "userId", "left_anti").unionByName(cold_recs)
 
-        # 6b. 冷启动用户替换为内容推荐
-        cold_recs = recommend_content_based(ratings, movies, args.top_n)
-        if cold_recs is not None:
-            cold_ids = cold_recs.select("userId").distinct()
-            user_recs_flat = user_recs_flat.join(cold_ids, "userId", "left_anti").unionByName(cold_recs)
-
-        # 6c. Coverage / Diversity 评估
+        # 6b. Coverage / Diversity 评估
         compute_coverage_diversity(user_recs_flat, movies, args.top_n)
 
         # 7. 保存输出
