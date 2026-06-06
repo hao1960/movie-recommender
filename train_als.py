@@ -620,10 +620,10 @@ def save_outputs(
     logger.info(f"保存推荐结果到 {recs_path}")
     user_recs_flat.write.csv(recs_path, header=True, mode="overwrite")
 
-    # 电影映射（数据量小，合并为单文件）
+    # 电影映射（用 | 分隔避免标题中的逗号导致解析错误）
     movies_path = os.path.join(output_dir, "movies")
     logger.info(f"保存电影映射到 {movies_path}")
-    movies.coalesce(1).write.csv(movies_path, header=True, mode="overwrite")
+    movies.coalesce(1).write.option("sep", "|").csv(movies_path, header=True, mode="overwrite")
 
     # ALS 模型（Parquet 格式）
     model_path = os.path.join(output_dir, "als_model")
