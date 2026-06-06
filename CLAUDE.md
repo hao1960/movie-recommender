@@ -67,30 +67,59 @@ movie-recommender/
 
 ## 开发环境搭建
 
-### Windows 11
+### Windows 11（已验证可用）
+
+**前提：Spark 3.4.1 仅兼容 Java 8/11，需要 Python 3.11（不要用 3.12+）。**
+
+#### 1. Java 8
+
+下载 [Adoptium Temurin 8](https://adoptium.net/download/)（选 .zip，解压到集中管理的目录）：
+
+```powershell
+# 解压到 E:\java_devlop\jdk8\
+E:\java_devlop\jdk8\bin\java -version   # 确认 1.8.0_xxx
+setx JAVA_HOME "E:\java_devlop\jdk8"    # 永久设置
+```
+
+> 多版本 Java 可并存，设 `JAVA_HOME` 指向 8 即可。
+
+#### 2. Hadoop winutils（Spark 写文件必需）
+
+从 [cdarlint/winutils](https://github.com/cdarlint/winutils) 下载对应 Hadoop 版本的 `winutils.exe` 和 `hadoop.dll`（Spark 3.4.1 → hadoop-3.3.x 目录）：
+
+```powershell
+# 放到集中目录
+mkdir E:\java_devlop\hadoop\bin
+# 将 winutils.exe 和 hadoop.dll 放入 E:\java_devlop\hadoop\bin\
+setx HADOOP_HOME "E:\java_devlop\hadoop"   # 永久设置
+```
+
+#### 3. Python 环境（推荐 conda）
+
+不要用 Python 3.12+（缺少 distutils，与 PySpark 3.4.1 不兼容）：
 
 ```bash
-# 1. 安装 Java 8（推荐 OpenJDK 8）
-#    下载 Adoptium Temurin 8: https://adoptium.net/download/
-#    或使用 winget: winget install EclipseAdoptium.Temurin.8.JDK
-java -version  # 确认输出 1.8.0_xxx
-
-# 2. 安装 Spark 3.4.1
-#    下载 spark-3.4.1-bin-hadoop3.tgz，解压到 C:\spark
-#    设置系统环境变量：
-#      SPARK_HOME=C:\spark
-#      HADOOP_HOME=C:\hadoop （需要 winutils.exe，见下文）
-#      PATH 追加 %SPARK_HOME%\bin
-#    winutils.exe 配置：从 https://github.com/cdarlint/winutils 下载
-#      对应 Hadoop 3.2 版本的 winutils.exe 放到 C:\hadoop\bin\
-
-# 3. 创建虚拟环境
-python -m venv venv
-venv\Scripts\activate
+conda create -n movie python=3.11 -y
+conda activate movie
 pip install -r requirements.txt
+```
 
-# 4. 下载数据集（一次下载 ml-1m + ml-25m）
-python download_data.py
+#### 4. 数据集
+
+```bash
+python download_data.py                    # ml-1m + ml-25m
+python download_data.py --dataset ml-1m    # 只要 1M
+```
+
+#### 5. 新终端启动前确认
+
+每次新开 PowerShell：
+
+```powershell
+# JAVA_HOME / HADOOP_HOME setx 后永久生效，但需确认
+$env:JAVA_HOME
+$env:HADOOP_HOME
+conda activate movie
 ```
 
 ### Ubuntu 20.04+
@@ -106,7 +135,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# 4. 下载数据集（一次下载 ml-1m + ml-25m）
+# 4. 下载数据集
 python download_data.py
 ```
 

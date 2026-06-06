@@ -45,11 +45,12 @@ MovieLens 数据集            Spark ALS 离线训练                    Flask A
 | 组件 | 版本 | 说明 |
 |------|------|------|
 | OS | Windows 10+ / Ubuntu 20.04+ / macOS | 跨平台支持 |
-| Java | 8 | OpenJDK 8（Adoptium Temurin 8），Spark 3.x 最稳定搭配 |
+| Java | **8**（不要用 17/21/25） | OpenJDK 8（Adoptium Temurin 8），Spark 3.4.1 仅兼容 8/11 |
 | Spark | 3.4.1 | 预编译 Hadoop 3 版本 |
-| Python | 3.8+ | Windows: `python`，Linux/macOS: `python3` |
+| Python | **3.11**（不要用 3.12+） | 推荐 conda 环境，Python 3.12+ 缺少 distutils |
 | 内存 | ≥ 4 GB | 1M 数据集 2 GB 即可，25M 建议 8 GB+ |
 | 磁盘 | ≥ 5 GB | 数据集 + 模型输出 |
+| Hadoop winutils | hadoop-3.3.x | Windows 必须，Spark 写文件依赖 |
 
 ---
 
@@ -444,13 +445,14 @@ ratings.dat 使用 :: 分隔，ratings.csv 使用逗号分隔。
 | 现象 | 可能原因 | 解决 |
 |------|---------|------|
 | `java: command not found` | Java 未安装或 PATH 未配置 | 安装 Java 8 并配置 JAVA_HOME |
-| `NoClassDefFoundError` | Java 版本不兼容 | 切换为 Java 8 |
+| `UnsupportedOperationException: getSubject` | Java 版本过新（17+） | 换 Java 8：下载 Temurin 8 .zip 解压，设 JAVA_HOME |
+| `No module named 'distutils'` | Python 3.12+ 移除了 distutils | `pip install setuptools` 或换 Python 3.11（推荐 conda） |
+| `Connection reset: socket write error` | Python 3.12 + PySpark worker 崩溃 | 换 Python 3.11（`conda create -n movie python=3.11`） |
+| `NativeIO$Windows.access0` / `winutils.exe` 错误 | 缺少 Hadoop winutils/hadoop.dll | 下载 winutils.exe + hadoop.dll 到 HADOOP_HOME\\bin，设 HADOOP_HOME |
 | `OutOfMemoryError` | Driver 内存不足 | 加 `--driver_memory 4g` 或改用 ml-1m |
 | `FileNotFoundError: part-*.csv` | Flask 启动前未训练 | 先执行 `python train_als.py` |
 | Flask 返回 404 | 用户 ID 超过数据范围 | ml-1m 用户 ID 范围 1~6040 |
-| Windows 上 Spark 报 `winutils.exe` 错误 | 缺少 Hadoop winutils | 下载 winutils.exe 并配置 HADOOP_HOME（见 CLAUDE.md） |
-| `spark.sql.warehouse.dir` 错误 | Windows 上 /tmp 路径无效 | train_als.py 已自动处理，无需手动配置 |
-| 训练脚本报 `split("::")` 索引越界 | `ratings.dat` 文件损坏或有空行 | 重新下载并解压数据集 |
+| `userId Ids MUST NOT be Null` | CSV 表头被当成数据 | train_als.py 已自动过滤 null 行 |
 
 更多排错见 [design.md](design.md) 第八节。
 
