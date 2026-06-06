@@ -86,6 +86,9 @@ def init_spark(driver_memory: str) -> SparkSession:
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.driver.extraJavaOptions", jvm_opens)
         .config("spark.executor.extraJavaOptions", jvm_opens)
+        .config("spark.network.timeout", "800s")           # 大数据集 Python worker 防断开
+        .config("spark.executor.heartbeatInterval", "60s")
+        .config("spark.sql.files.maxPartitionBytes", "67108864")  # 64MB 分区，避免单分区过大
     )
 
     if sys.platform == "win32":
