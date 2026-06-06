@@ -61,6 +61,10 @@ def parse_args() -> argparse.Namespace:
 
 def init_spark(driver_memory: str) -> SparkSession:
     """初始化 Spark Session，自动适配 Windows / Linux 平台 + Java 17+"""
+    # 确保 PySpark 使用当前虚拟环境的 Python（避免 Python worker 连接超时）
+    os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+
     # Java 17+ 模块系统兼容：Spark 3.4.1 需要开放内部模块访问
     jvm_opens = (
         "--add-opens=java.base/java.lang=ALL-UNNAMED "
