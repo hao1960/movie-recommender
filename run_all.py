@@ -1,6 +1,10 @@
-"""一键运行：下载 → 训练 → 启动 API 服务
+"""
+一键运行：下载 -> 训练 -> 启动 API 服务
 
 用法:
+    # 先激活虚拟环境！
+    #   Windows:  venv\\Scripts\\activate
+    #   Linux:    source venv/bin/activate
     python run_all.py                          # 默认：ml-1m + ALS + 内存模式
     python run_all.py --dataset ml-25m         # 25M 数据集 + 自动 SQLite
     python run_all.py --tune                   # 超参数调优
@@ -10,12 +14,50 @@
     python run_all.py --port 8080              # 指定端口
 """
 import argparse
+import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+
+
+def preflight_check(args: argparse.Namespace) -> None:
+    """启动前检查环境是否就绪，发现问题给出明确指引后退出"""
+    errors = []
+
+    # 1. pyspark
+    try:
+        import pyspark  # noqa: F401
+    except ImportError:
+        errors.append(
+            "pyspark 未安装。请先激活虚拟环境并安装依赖:\n"
+            "  Windows:  venv\\Scripts\\activate && pip install -r requirements.txt\n"
+            "  Linux:    source venv/bin/activate && pip install -r requirements.txt"
+        )
+
+    # 2. Java
+    if shutil.which("java") is None:
+        errors.append(
+            "未找到 java。Spark 需要 Java 8/11/17。\n"
+            "  Windows: 安装 Adoptium Temurin 8 并确保 java 在 PATH 中\n"
+            "  Linux:   sudo apt install openjdk-8-jdk -y"
+        )
+
+    # 3. 训练产出（跳过训练时必须有）
+    if args.skip_train:
+        recs_dir = ROOT / "output" / "user_recs"
+        if not recs_dir.exists() or not list(recs_dir.glob("part-*.csv")):
+            errors.append(
+                "未找到训练产出 output/user_recs/part-*.csv。\n"
+                "请先运行训练: python train_als.py --data_dir data/ml-1m"
+            )
+
+    if errors:
+        print("\n[环境检查失败]\n")
+        for i, e in enumerate(errors, 1):
+            print(f"  {i}. {e}\n")
+        sys.exit(1)
 
 
 def run(cmd: str, description: str) -> int:
@@ -44,6 +86,10 @@ def main():
     parser.add_argument("--log_file", default="logs/api.log", help="日志文件")
     args = parser.parse_args()
 
+    # 环境检查
+    preflight_check(args)
+    print("[环境检查] 通过")
+
     data_dir = f"data/{args.dataset}"
     db_path = f"output/{args.dataset}.db"
     is_large = args.dataset == "ml-25m"
@@ -71,7 +117,7 @@ def main():
         if args.tune:
             desc += " (超参数调优)"
         if args.hybrid:
-            desc += f" (混合推荐, α={args.alpha})"
+            desc += f" (混合推荐, alpha={args.alpha})"
 
         if run(train_cmd, desc):
             sys.exit(1)
