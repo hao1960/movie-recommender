@@ -14,6 +14,7 @@
     python run_all.py --port 8080              # 指定端口
 """
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -37,20 +38,28 @@ def preflight_check(args: argparse.Namespace) -> None:
         )
 
     # 2. Java 版本检查（Spark 3.4.1 仅兼容 Java 8/11）
-    java_path = shutil.which("java")
-    if java_path is None:
+    java_home = os.environ.get("JAVA_HOME", "")
+    if java_home:
+        java_path = os.path.join(java_home, "bin", "java")
+        if sys.platform == "win32":
+            java_path += ".exe"
+        if not os.path.exists(java_path):
+            java_path = java_home  # fallback
+    else:
+        java_path = shutil.which("java")
+
+    if java_path is None or not os.path.exists(str(java_path)):
         errors.append(
             "未找到 java。Spark 需要 Java 8（推荐）或 Java 11。\n"
-            "  Windows: 安装 Adoptium Temurin 8 并确保 java 在 PATH 中\n"
+            "  Windows: 下载 Adoptium Temurin 8 .zip 解压后设置 JAVA_HOME\n"
             "  Linux:   sudo apt install openjdk-8-jdk -y"
         )
     else:
         try:
             ver = subprocess.run(
-                [java_path, "-version"], capture_output=True, text=True
+                [str(java_path), "-version"], capture_output=True, text=True
             )
             output = ver.stderr or ver.stdout
-            # 解析版本号: 'version "25.0.2"' → 25
             import re
             m = re.search(r'version "(\d+)', output)
             if m:
@@ -61,9 +70,7 @@ def preflight_check(args: argparse.Namespace) -> None:
                         "请安装 Java 8 并设置 JAVA_HOME:\n"
                         "  1. 下载 Adoptium Temurin 8 .zip: https://adoptium.net/download/\n"
                         "  2. 解压到你的 JDK 目录（如 E:\\java_devlop\\jdk8）\n"
-                        "  3. 设置环境变量:\n"
-                        "     PowerShell:  $env:JAVA_HOME = \"E:\\java_devlop\\jdk8\"\n"
-                        "     永久设置:    setx JAVA_HOME \"E:\\java_devlop\\jdk8\""
+                        "  3. PowerShell: $env:JAVA_HOME = \"E:\\java_devlop\\jdk8\""
                     )
         except Exception:
             pass
