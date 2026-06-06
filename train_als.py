@@ -82,6 +82,7 @@ def init_spark(driver_memory: str) -> SparkSession:
         .config("spark.driver.memory", driver_memory)
         .config("spark.sql.shuffle.partitions", "16")
         .config("spark.default.parallelism", "16")
+        .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.driver.extraJavaOptions", jvm_opens)
         .config("spark.executor.extraJavaOptions", jvm_opens)
