@@ -86,11 +86,11 @@ def init_spark(driver_memory: str) -> SparkSession:
     if sys.platform == "win32":
         # Windows: Hadoop 默认使用 /tmp 和 POSIX 权限，需要重定向到合法路径
         import tempfile
-        win_tmp = "file:///" + tempfile.gettempdir().replace("\\", "/").lstrip("/")
+        win_tmp = tempfile.gettempdir()
         builder = (
             builder
-            .config("spark.sql.warehouse.dir", win_tmp + "/spark-warehouse")
-            .config("spark.local.dir", win_tmp + "/spark-tmp")
+            .config("spark.sql.warehouse.dir", "file:///" + win_tmp.replace("\\", "/") + "/spark-warehouse")
+            .config("spark.local.dir", os.path.join(win_tmp, "spark-tmp"))
             .config("spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version", "2")
         )
         logger.info("检测到 Windows 平台，已配置 Hadoop 兼容路径")
