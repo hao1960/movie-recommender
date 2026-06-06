@@ -334,10 +334,14 @@ def evaluate_model(model: ALSModel, test: DataFrame) -> float:
 
 
 def compute_ranking_metrics(
-    model: ALSModel, test: DataFrame, k: int = 10
+    model: ALSModel, test: DataFrame, k: int = 10, sample_frac: float = 1.0
 ) -> tuple[float, float, float]:
     """计算 Precision@K、Recall@K、NDCG@K"""
     test_users = test.select("userId").distinct()
+    n_test_users = test_users.count()
+    if sample_frac < 1.0 and n_test_users > 10000:
+        test_users = test_users.sample(False, sample_frac, seed=42)
+        logger.info(f"排序指标采样: {test_users.count()}/{n_test_users} 用户")
     user_recs = model.recommendForUserSubset(test_users, k)
 
     # 正样本：评分 ≥ 3.5 的电影
@@ -652,7 +656,8 @@ def main() -> None:
 
         # 5. 评估
         evaluate_model(model, test)
-        compute_ranking_metrics(model, test, k=args.top_n)
+        compute_ranking_metrics(model, test, k=args.top_n,
+                               sample_frac=0.1 if "25m" in args.data_dir.lower() else 1.0)
 
         # 6. 生成全量推荐
         if args.hybrid:
