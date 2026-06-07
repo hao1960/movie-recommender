@@ -660,7 +660,7 @@ def main() -> None:
         # 5. 评估
         evaluate_model(model, test)
         compute_ranking_metrics(model, test, k=args.top_n,
-                               sample_frac=0.1 if "25m" in args.data_dir.lower() else 1.0)
+                               sample_frac=0.5 if "25m" in args.data_dir.lower() else 1.0)
 
         # 6. 生成全量推荐
         if args.hybrid:
