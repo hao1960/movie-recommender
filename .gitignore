@@ -13,6 +13,8 @@ output/movies/*
 !output/movies/.gitkeep
 output/als_model/*
 !output/als_model/.gitkeep
+# Generated SQLite DB (large, rebuilt from CSV on first run)
+output/*.db
 
 # Spark runtime artifacts
 *.crc
@@ -43,6 +45,9 @@ data/ml-25m/*
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# MS Office temp lock files
+~$*
 
 # Environment / secrets
 .env

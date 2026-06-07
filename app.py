@@ -52,7 +52,9 @@ def load_csv_dir(dir_path: str) -> pd.DataFrame:
     for fname in sorted(os.listdir(dir_path)):
         if fname.startswith("part-") and fname.endswith(".csv"):
             filepath = os.path.join(dir_path, fname)
-            frames.append(pd.read_csv(filepath))
+            # Spark CSV 默认用反斜杠转义引号（\"），而 pandas 默认按 RFC 双引号（""）解析。
+            # MovieLens 25M 部分标题含逗号/引号，必须用 escapechar='\\' 才能正确解析。
+            frames.append(pd.read_csv(filepath, escapechar="\\"))
     if not frames:
         raise FileNotFoundError(f"在 {dir_path} 中未找到 part-*.csv 文件，请先运行 train_als.py")
     return pd.concat(frames, ignore_index=True)
