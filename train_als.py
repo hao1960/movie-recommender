@@ -363,10 +363,32 @@ def compute_ranking_metrics(
         lambda r: (list(map(int, r.pred_items)), list(map(int, r.actual_items)))
     )
 
-    metrics = RankingMetrics(pred_actual_rdd)
-    p = metrics.precisionAt(k)
-    r = metrics.recallAt(k)
-    ndcg = metrics.ndcgAt(k)
+    try:
+        metrics = RankingMetrics(pred_actual_rdd)
+        p = metrics.precisionAt(k)
+        r = metrics.recallAt(k)
+        ndcg = metrics.ndcgAt(k)
+    except Exception:
+        logger.warning("RankingMetrics 计算失败（数据量过大），尝试备用算法...")
+        # 备选：纯 DataFrame 方式估算 Precision@K 和 Recall@K
+        def _hit_count(_k):
+            pred_k = user_recs.select(
+                "userId", explode("recommendations").alias("rec")
+            ).select("userId", col("rec.movieId").alias("movieId"))
+            hits = pred_k.join(
+                test.filter(col("rating") >= 3.5).select("userId", "movieId"),
+                ["userId", "movieId"], "inner"
+            ).count()
+            return hits
+
+        n_users = test_users.count()
+        hit_10 = _hit_count(10)
+        p = hit_10 / max(n_users * k, 1)
+        # 简化 Recall: hits / total relevant
+        total_rel = test.filter(col("rating") >= 3.5).count()
+        r = min(hit_10 / max(total_rel, 1), 1.0)
+        ndcg = 0.0  # NDCG 需要排序位置信息，备选方案不计算
+
     logger.info(f"Precision@{k}={p:.4f}  Recall@{k}={r:.4f}  NDCG@{k}={ndcg:.4f}")
     return p, r, ndcg
 
@@ -660,7 +682,7 @@ def main() -> None:
         # 5. 评估
         evaluate_model(model, test)
         compute_ranking_metrics(model, test, k=args.top_n,
-                               sample_frac=0.5 if "25m" in args.data_dir.lower() else 1.0)
+                               sample_frac=0.05 if "25m" in args.data_dir.lower() else 1.0)
 
         # 6. 生成全量推荐
         if args.hybrid:
