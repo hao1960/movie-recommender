@@ -368,26 +368,22 @@ def compute_ranking_metrics(
         p = metrics.precisionAt(k)
         r = metrics.recallAt(k)
         ndcg = metrics.ndcgAt(k)
-    except Exception:
-        logger.warning("RankingMetrics 计算失败（数据量过大），尝试备用算法...")
+    except Exception as e:
+        logger.warning(f"RankingMetrics 计算失败 ({e})，使用纯 DataFrame 备选算法...")
         # 备选：纯 DataFrame 方式估算 Precision@K 和 Recall@K
-        def _hit_count(_k):
-            pred_k = user_recs.select(
-                "userId", explode("recommendations").alias("rec")
-            ).select("userId", col("rec.movieId").alias("movieId"))
-            hits = pred_k.join(
-                test.filter(col("rating") >= 3.5).select("userId", "movieId"),
-                ["userId", "movieId"], "inner"
-            ).count()
-            return hits
+        pred_exploded = user_recs.select(
+            "userId", explode("recommendations").alias("rec")
+        ).select("userId", col("rec.movieId").alias("movieId"))
 
+        relevant = test.filter(col("rating") >= 3.5).select("userId", "movieId")
+        hits_df = pred_exploded.join(relevant, ["userId", "movieId"], "inner")
+        hit_count = hits_df.count()
         n_users = test_users.count()
-        hit_10 = _hit_count(10)
-        p = hit_10 / max(n_users * k, 1)
-        # 简化 Recall: hits / total relevant
-        total_rel = test.filter(col("rating") >= 3.5).count()
-        r = min(hit_10 / max(total_rel, 1), 1.0)
-        ndcg = 0.0  # NDCG 需要排序位置信息，备选方案不计算
+        p = hit_count / max(n_users * k, 1)
+        total_rel = relevant.count()
+        r = min(hit_count / max(total_rel, 1), 1.0)
+        ndcg = 0.0
+        logger.info(f"命中数={hit_count} 用户数={n_users} 相关物品={total_rel}")
 
     logger.info(f"Precision@{k}={p:.4f}  Recall@{k}={r:.4f}  NDCG@{k}={ndcg:.4f}")
     return p, r, ndcg
@@ -682,7 +678,7 @@ def main() -> None:
         # 5. 评估
         evaluate_model(model, test)
         compute_ranking_metrics(model, test, k=args.top_n,
-                               sample_frac=0.05 if "25m" in args.data_dir.lower() else 1.0)
+                               sample_frac=1.0)
 
         # 6. 生成全量推荐
         if args.hybrid:
