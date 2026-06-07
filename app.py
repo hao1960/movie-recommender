@@ -20,10 +20,14 @@ import logging
 import os
 import sqlite3
 import time
+from functools import lru_cache
 from logging.handlers import RotatingFileHandler
 
 import pandas as pd
+import requests
 from flask import Flask, jsonify, request, g, send_from_directory
+
+from config import TMDB_API_KEY, TMDB_BASE_URL, TMDB_IMAGE_BASE_URL, POSTER_SIZE, REQUEST_TIMEOUT
 
 # ---------- 日志配置 ----------
 logging.basicConfig(
@@ -191,6 +195,162 @@ def _query_counts_sqlite() -> tuple[int, int]:
 
 
 # ============================================================
+# TMDB 电影海报获取
+# ============================================================
+
+# 简单缓存字典（不缓存 None 结果）
+_tmdb_cache: dict[str, dict | None] = {}
+
+
+def _search_movie_from_tmdb(title: str) -> dict | None:
+    """从 TMDB 搜索电影（带缓存）
+
+    如果网络不可用，返回 None 并使用默认值。
+    不缓存 None 结果，以便网络恢复后可以重试。
+    """
+    # 检查缓存（只缓存成功结果）
+    if title in _tmdb_cache:
+        return _tmdb_cache[title]
+
+    # 清理标题：去掉年份括号，如 "Star Wars (1977)" -> "Star Wars"
+    clean_title = title.split("(")[0].strip()
+
+    url = f"{TMDB_BASE_URL}/search/movie"
+    params = {
+        "api_key": TMDB_API_KEY,
+        "query": clean_title,
+        "language": "zh-CN",  # 中文结果
+    }
+
+    logger.info(f"TMDB 搜索: {clean_title}")
+
+    try:
+        resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+
+        if data.get("results"):
+            movie = data["results"][0]  # 取第一个匹配结果
+            poster_path = movie.get("poster_path")
+            logger.info(f"TMDB 找到: {movie.get('title')}, poster: {poster_path}")
+            result = {
+                "tmdb_id": movie["id"],
+                "poster_path": poster_path,
+                "overview": movie.get("overview", ""),
+                "release_date": movie.get("release_date", ""),
+                "vote_average": movie.get("vote_average", 0),
+            }
+            _tmdb_cache[title] = result  # 缓存成功结果
+            return result
+        else:
+            logger.warning(f"TMDB 未找到: {clean_title}")
+            # 不缓存 None，以便重试
+    except requests.exceptions.Timeout:
+        logger.warning(f"TMDB API 超时（网络问题）: {clean_title}")
+    except requests.exceptions.ConnectionError:
+        logger.warning(f"TMDB API 连接失败（网络不可用）: {clean_title}")
+    except Exception as e:
+        logger.warning(f"TMDB 搜索失败 [{title}]: {e}")
+
+    return None
+
+
+def get_movie_poster(title: str) -> str:
+    """根据电影标题获取海报 URL"""
+    result = _search_movie_from_tmdb(title)
+    if result and result.get("poster_path"):
+        return f"{TMDB_IMAGE_BASE_URL}/{POSTER_SIZE}{result['poster_path']}"
+    return "/static/default_poster.jpg"
+
+
+def get_movie_details(title: str, genres: str = "") -> dict:
+    """获取电影详情（海报、简介、评分等）
+
+    海报获取优先级：
+    1. TMDB 海报（真实海报）
+    2. AI 生成海报（Pollinations.ai）
+    """
+    result = _search_movie_from_tmdb(title)
+
+    if result:
+        # TMDB 有结果
+        if result.get("poster_path"):
+            # 有真实海报
+            poster_url = f"{TMDB_IMAGE_BASE_URL}/{POSTER_SIZE}{result['poster_path']}"
+        else:
+            # TMDB 有结果但没有海报，使用 AI 生成
+            poster_url = generate_ai_poster_url(title, genres)
+        return {
+            "poster_url": poster_url,
+            "overview": result.get("overview", ""),
+            "release_date": result.get("release_date", ""),
+            "vote_average": result.get("vote_average", 0),
+        }
+
+    # TMDB 没有结果，使用 AI 生成海报
+    return {
+        "poster_url": generate_ai_poster_url(title, genres),
+        "overview": "",
+        "release_date": "",
+        "vote_average": 0,
+    }
+
+
+def get_movie_genres(title: str) -> str:
+    """获取电影类型（用于生成个性化海报）"""
+    result = _search_movie_from_tmdb(title)
+    if result:
+        return result.get("overview", "")
+    return ""
+
+
+def generate_ai_poster_url(title: str, genres: str) -> str:
+    """使用 Pollinations.ai 生成 AI 海报 URL
+
+    这是一个免费的 AI 图像生成服务，可以根据提示词生成电影海报风格的图片。
+    """
+    # 清理标题
+    clean_title = title.split("(")[0].strip()
+
+    # 根据类型生成风格提示词
+    style_map = {
+        "Action": "action movie poster, dramatic lighting, explosions",
+        "Adventure": "adventure movie poster, epic landscape, treasure",
+        "Comedy": "comedy movie poster, funny scene, bright colors",
+        "Drama": "drama movie poster, emotional portrait, cinematic",
+        "Horror": "horror movie poster, dark atmosphere, scary",
+        "Romance": "romance movie poster, romantic scene, soft lighting",
+        "Sci-Fi": "sci-fi movie poster, futuristic, space, technology",
+        "Thriller": "thriller movie poster, suspenseful, dark mood",
+        "Animation": "animated movie poster, colorful, cartoon style",
+        "Documentary": "documentary poster, real photo style, informative",
+        "Fantasy": "fantasy movie poster, magical, mythical creatures",
+        "Mystery": "mystery movie poster, detective, dark shadows",
+        "War": "war movie poster, battlefield, soldiers",
+        "Western": "western movie poster, cowboy, desert",
+        "Music": "music movie poster, concert, instruments",
+        "Crime": "crime movie poster, detective, noir style",
+    }
+
+    # 获取主类型
+    first_genre = genres.split("|")[0] if genres else "Drama"
+    style = style_map.get(first_genre, "cinematic movie poster")
+
+    # 构建提示词
+    prompt = f"{clean_title}, {style}, movie poster art, detailed, professional"
+
+    # URL 编码提示词
+    import urllib.parse
+    encoded_prompt = urllib.parse.quote(prompt)
+
+    # Pollinations.ai 免费 API
+    # 使用固定种子确保同一电影生成相同的海报
+    seed = hash(title) % 1000000
+
+    return f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=500&height=750&seed={seed}&nologo=true"
+
+
+# ============================================================
 # 中间件
 # ============================================================
 
@@ -246,7 +406,7 @@ def home():
 
 @app.route("/recommend/<int:user_id>")
 def recommend(user_id: int):
-    """为指定用户返回个性化推荐列表"""
+    """为指定用户返回个性化推荐列表（含电影海报）"""
     limit = request.args.get("limit", 10, type=int)
     limit = max(1, min(limit, 50))
 
@@ -254,15 +414,31 @@ def recommend(user_id: int):
     if not rec_list:
         return jsonify({"error": f"User {user_id} not found"}), 404
 
+    # 为每部电影添加海报和详情
+    logger.info(f"获取用户 {user_id} 的推荐海报...")
+    for rec in rec_list:
+        logger.info(f"  处理电影: {rec['title']}")
+        details = get_movie_details(rec["title"], rec.get("genres", ""))
+        rec["poster_url"] = details["poster_url"]
+        rec["overview"] = details["overview"]
+        rec["release_date"] = details["release_date"]
+        rec["vote_average"] = details["vote_average"]
+        logger.info(f"    海报: {rec['poster_url'][:60]}...")
+
     return jsonify({"user_id": user_id, "recommendations": rec_list})
 
 
 @app.route("/movie/<int:movie_id>")
 def movie_info(movie_id: int):
-    """查询单部电影元信息"""
+    """查询单部电影元信息（含海报）"""
     data = _query_movie(movie_id)
     if data is None:
         return jsonify({"error": f"Movie {movie_id} not found"}), 404
+
+    # 添加海报和详情
+    details = get_movie_details(data["title"])
+    data.update(details)
+
     return jsonify(data)
 
 

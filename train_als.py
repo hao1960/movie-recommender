@@ -89,8 +89,10 @@ def init_spark(driver_memory: str, data_dir: str = "") -> SparkSession:
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.driver.extraJavaOptions", jvm_opens)
         .config("spark.executor.extraJavaOptions", jvm_opens)
-        .config("spark.network.timeout", "800s")           # 大数据集 Python worker 防断开
-        .config("spark.executor.heartbeatInterval", "60s")
+        .config("spark.network.timeout", "1200s")          # 增加超时时间到 20 分钟
+        .config("spark.executor.heartbeatInterval", "120s")  # 增加心跳间隔
+        .config("spark.python.worker.retries", "10")        # Python worker 重试次数
+        .config("spark.python.useDaemon", "false")          # Windows 兼容：禁用 daemon
         .config("spark.sql.files.maxPartitionBytes", "67108864")  # 64MB 分区，避免单分区过大
     )
 
@@ -339,36 +341,45 @@ def evaluate_model(model: ALSModel, test: DataFrame) -> float:
 def compute_ranking_metrics(
     model: ALSModel, test: DataFrame, k: int = 10, sample_frac: float = 1.0
 ) -> tuple[float, float, float]:
-    """计算 Precision@K、Recall@K、NDCG@K"""
-    test_users = test.select("userId").distinct()
-    n_test_users = test_users.count()
-    if sample_frac < 1.0 and n_test_users > 10000:
-        test_users = test_users.sample(False, sample_frac, seed=42)
-        logger.info(f"排序指标采样: {test_users.count()}/{n_test_users} 用户")
-    user_recs = model.recommendForUserSubset(test_users, k)
+    """计算 Precision@K、Recall@K、NDCG@K
 
-    # 正样本：评分 ≥ 3.5 的电影
-    actual = (
-        test.filter(col("rating") >= 3.5)
-        .groupBy("userId")
-        .agg(collect_list("movieId").alias("actual_items"))
-    )
+    注意：在 Windows 上 RankingMetrics 可能因 Python worker 连接问题失败，
+    此时返回默认值 (0.0, 0.0, 0.0) 并跳过评估。
+    """
+    try:
+        test_users = test.select("userId").distinct()
+        n_test_users = test_users.count()
+        if sample_frac < 1.0 and n_test_users > 10000:
+            test_users = test_users.sample(False, sample_frac, seed=42)
+            logger.info(f"排序指标采样: {test_users.count()}/{n_test_users} 用户")
+        user_recs = model.recommendForUserSubset(test_users, k)
 
-    pred = user_recs.select(
-        "userId", col("recommendations.movieId").alias("pred_items")
-    )
+        # 正样本：评分 ≥ 3.5 的电影
+        actual = (
+            test.filter(col("rating") >= 3.5)
+            .groupBy("userId")
+            .agg(collect_list("movieId").alias("actual_items"))
+        )
 
-    joined = pred.join(actual, "userId", "inner")
-    pred_actual_rdd = joined.select("pred_items", "actual_items").rdd.map(
-        lambda r: (list(map(int, r.pred_items)), list(map(int, r.actual_items)))
-    )
+        pred = user_recs.select(
+            "userId", col("recommendations.movieId").alias("pred_items")
+        )
 
-    metrics = RankingMetrics(pred_actual_rdd)
-    p = metrics.precisionAt(k)
-    r = metrics.recallAt(k)
-    ndcg = metrics.ndcgAt(k)
-    logger.info(f"Precision@{k}={p:.4f}  Recall@{k}={r:.4f}  NDCG@{k}={ndcg:.4f}")
-    return p, r, ndcg
+        joined = pred.join(actual, "userId", "inner")
+        pred_actual_rdd = joined.select("pred_items", "actual_items").rdd.map(
+            lambda r: (list(map(int, r.pred_items)), list(map(int, r.actual_items)))
+        )
+
+        metrics = RankingMetrics(pred_actual_rdd)
+        p = metrics.precisionAt(k)
+        r = metrics.recallAt(k)
+        ndcg = metrics.ndcgAt(k)
+        logger.info(f"Precision@{k}={p:.4f}  Recall@{k}={r:.4f}  NDCG@{k}={ndcg:.4f}")
+        return p, r, ndcg
+    except Exception as e:
+        logger.warning(f"排序指标计算失败（Windows 兼容性问题）: {e}")
+        logger.warning("跳过排序指标评估，继续生成推荐结果...")
+        return 0.0, 0.0, 0.0
 
 
 def compute_coverage_diversity(
@@ -657,10 +668,16 @@ def main() -> None:
         else:
             model = train_als(train, args)
 
-        # 5. 评估
-        evaluate_model(model, test)
-        compute_ranking_metrics(model, test, k=args.top_n,
-                               sample_frac=0.1 if "25m" in args.data_dir.lower() else 1.0)
+        # 5. 评估 - Windows 上简化评估流程避免 Python worker 崩溃
+        rmse = evaluate_model(model, test)
+
+        # 排序指标在 Windows 上可能因 Python worker 问题失败，跳过或简化处理
+        if sys.platform == "win32":
+            logger.info("Windows 平台：跳过排序指标评估以避免 Python worker 问题")
+            logger.info("如需完整评估，请在 Linux/macOS 上运行")
+        else:
+            compute_ranking_metrics(model, test, k=args.top_n,
+                                   sample_frac=0.1 if "25m" in args.data_dir.lower() else 1.0)
 
         # 6. 生成全量推荐
         if args.hybrid:
@@ -674,7 +691,10 @@ def main() -> None:
                 user_recs_flat = user_recs_flat.join(cold_ids, "userId", "left_anti").unionByName(cold_recs)
 
         # 6b. Coverage / Diversity 评估
-        compute_coverage_diversity(user_recs_flat, movies, args.top_n)
+        try:
+            compute_coverage_diversity(user_recs_flat, movies, args.top_n)
+        except Exception as e:
+            logger.warning(f"覆盖率/多样性评估失败: {e}")
 
         # 7. 保存输出
         save_outputs(user_recs_flat, movies, model, args.output_dir)

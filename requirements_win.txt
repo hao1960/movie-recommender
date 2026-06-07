@@ -1,0 +1,9 @@
+# Core dependencies (ASCII only for Windows compatibility)
+pyspark==3.4.1
+pandas>=2.1.4
+numpy>=1.26.0
+flask>=2.3.0
+setuptools>=68.0
+
+# Dev / test
+pytest>=8.0
