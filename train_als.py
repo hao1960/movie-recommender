@@ -49,6 +49,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reg_param", type=float, default=0.1, help="ALS 正则化参数")
     parser.add_argument("--top_n", type=int, default=10, help="为每个用户推荐 Top-N")
     parser.add_argument("--driver_memory", default="2g", help="Spark driver 内存")
+    parser.add_argument("--shuffle_partitions", type=int, default=16,
+                        help="Spark shuffle 分区数（1M 用 16，25M 建议 200）")
     parser.add_argument("--tune", action="store_true", help="启用超参数网格搜索（CrossValidator）")
     parser.add_argument("--hybrid", action="store_true", help="启用混合推荐（ALS + 内容相似度加权融合）")
     parser.add_argument("--alpha", type=float, default=0.7, help="混合推荐中 ALS 权重（0-1），默认 0.7")
@@ -59,8 +61,8 @@ def parse_args() -> argparse.Namespace:
 # Spark 初始化
 # ============================================================
 
-def init_spark(driver_memory: str, data_dir: str = "") -> SparkSession:
-    """初始化 Spark Session，自动适配 Windows / Linux 平台 + Java 17+ + 数据集规模"""
+def init_spark(driver_memory: str, shuffle_partitions: int = 16) -> SparkSession:
+    """初始化 Spark Session，自动适配 Windows / Linux 平台 + Java 17+"""
     # 确保 PySpark 使用当前虚拟环境的 Python（避免 Python worker 连接超时）
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
     os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
@@ -78,13 +80,16 @@ def init_spark(driver_memory: str, data_dir: str = "") -> SparkSession:
         os.environ["HADOOP_USER_NAME"] = os.environ.get("USERNAME", os.environ.get("USER", "hadoop"))
 
     # 数据集规模自适应：25M 需要更多分区
-    partitions = 200 if "25m" in data_dir.lower() else 16
 
     builder = (
         SparkSession.builder.appName("MovieRec_ALS")
+        # local[*, 4]: 用全部核心，并允许每个任务最多重试 4 次。
+        # 纯 local[*] 模式 maxFailures 被强制为 1，Windows 上 shuffle 文件被
+        # Defender 瞬时锁定导致 rename 失败时无法重试，整个 job 会直接中止。
+        .master("local[*,4]")
         .config("spark.driver.memory", driver_memory)
-        .config("spark.sql.shuffle.partitions", str(partitions))
-        .config("spark.default.parallelism", str(partitions))
+        .config("spark.sql.shuffle.partitions", str(shuffle_partitions))
+        .config("spark.default.parallelism", str(shuffle_partitions))
         .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.driver.extraJavaOptions", jvm_opens)
@@ -155,32 +160,28 @@ def load_dat_file(
 def load_ratings(spark: SparkSession, data_dir: str) -> DataFrame:
     """读取评分数据 → (userId, movieId, rating) DataFrame"""
     delimiter, encoding = detect_format(data_dir)
-    for fname in ("ratings.dat", "ratings.csv"):
-        path = os.path.join(data_dir, fname)
-        if os.path.exists(path):
-            logger.info(f"读取评分数据: {path} (分隔符='{delimiter}', 编码={encoding})")
-            # CSV 文件用原生 reader（JVM 内处理，避免 Python worker 瓶颈）
-            if delimiter == ",":
-                df = (
-                    spark.read.option("header", "true").option("charset", encoding).csv(path)
-                    .select(
-                        col("userId").cast("int"),
-                        col("movieId").cast("int"),
-                        col("rating").cast("float"),
-                    )
-                )
-            else:
-                df = load_dat_file(spark, path, ["userId", "movieId", "rating"], delimiter, encoding)
-                df = df.select(
-                    col("userId").cast("int"),
-                    col("movieId").cast("int"),
-                    col("rating").cast("float"),
-                )
-            break
+    csv_path = os.path.join(data_dir, "ratings.csv")
+    dat_path = os.path.join(data_dir, "ratings.dat")
+    if os.path.exists(csv_path):
+        # MovieLens 25M: 标准 CSV（带表头），用 Spark 原生 reader 自动处理表头与引号
+        logger.info(f"读取评分数据: {csv_path} (Spark 原生 CSV reader, 编码={encoding})")
+        df = (
+            spark.read.option("header", True).option("encoding", encoding)
+            .csv(csv_path)
+            .select("userId", "movieId", "rating")
+        )
+    elif os.path.exists(dat_path):
+        # MovieLens 1M: :: 分隔（双字符，CSV reader 不支持），用 RDD split
+        logger.info(f"读取评分数据: {dat_path} (分隔符='{delimiter}', 编码={encoding})")
+        df = load_dat_file(spark, dat_path, ["userId", "movieId", "rating"], delimiter, encoding)
     else:
         raise FileNotFoundError(f"在 {data_dir} 中未找到 ratings.dat 或 ratings.csv")
 
-    df = df.filter(col("userId").isNotNull() & col("movieId").isNotNull())
+    df = df.select(
+        col("userId").cast("int"),
+        col("movieId").cast("int"),
+        col("rating").cast("float"),
+    ).dropna()
     df.cache()
     n_users = df.select("userId").distinct().count()
     n_items = df.select("movieId").distinct().count()
@@ -192,27 +193,24 @@ def load_ratings(spark: SparkSession, data_dir: str) -> DataFrame:
 def load_movies(spark: SparkSession, data_dir: str) -> DataFrame:
     """读取电影元数据 → (movieId, title, genres) DataFrame"""
     delimiter, encoding = detect_format(data_dir)
-    for fname in ("movies.dat", "movies.csv"):
-        path = os.path.join(data_dir, fname)
-        if os.path.exists(path):
-            logger.info(f"读取电影数据: {path} (分隔符='{delimiter}', 编码={encoding})")
-            if delimiter == ",":
-                df = (
-                    spark.read.option("header", "true").option("charset", encoding).csv(path)
-                    .select(
-                        col("movieId").cast("int"),
-                        col("title"),
-                        col("genres"),
-                    )
-                )
-            else:
-                df = load_dat_file(spark, path, ["movieId", "title", "genres"], delimiter, encoding)
-                df = df.select(col("movieId").cast("int"), "title", "genres")
-            break
+    csv_path = os.path.join(data_dir, "movies.csv")
+    dat_path = os.path.join(data_dir, "movies.dat")
+    if os.path.exists(csv_path):
+        # MovieLens 25M: 标题含逗号且被引号包裹，必须用 Spark 原生 CSV reader 正确解析
+        logger.info(f"读取电影数据: {csv_path} (Spark 原生 CSV reader, 编码={encoding})")
+        df = (
+            spark.read.option("header", True).option("encoding", encoding)
+            .csv(csv_path)
+            .select("movieId", "title", "genres")
+        )
+    elif os.path.exists(dat_path):
+        # MovieLens 1M: :: 分隔，用 RDD split
+        logger.info(f"读取电影数据: {dat_path} (分隔符='{delimiter}', 编码={encoding})")
+        df = load_dat_file(spark, dat_path, ["movieId", "title", "genres"], delimiter, encoding)
     else:
         raise FileNotFoundError(f"在 {data_dir} 中未找到 movies.dat 或 movies.csv")
 
-    return df
+    return df.select(col("movieId").cast("int"), "title", "genres").dropna(subset=["movieId"])
 
 
 # ============================================================
@@ -656,7 +654,7 @@ def save_outputs(
 def main() -> None:
     args = parse_args()
 
-    spark = init_spark(args.driver_memory, args.data_dir)
+    spark = init_spark(args.driver_memory, args.shuffle_partitions)
     try:
         # 1. 加载数据
         ratings = load_ratings(spark, args.data_dir)
