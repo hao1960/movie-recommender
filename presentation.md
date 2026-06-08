@@ -242,8 +242,37 @@ $$\min_{U,V} \sum_{(i,j) \in \Omega} (R_{ij} - U_i V_j^T)^2 + \lambda(\|U_i\|^2 
 ### Q5：已评分电影为什么要从推荐中过滤？怎么实现的？
 推荐系统的价值是"发现"而非"回顾"。通过 `left anti join`：推荐结果 LEFT JOIN 用户评分记录，只保留未出现在评分表里的（movieId, userId）组合。
 
-### Q6：冷启动问题你是怎么处理的？
-评分<5 条的用户，ALS 因子向量训练不充分。改用基于内容的方案：提取用户已评分电影的所有类型作为"口味画像"，计算与每部电影的 Jaccard 相似度，推荐最相似且未看过的电影。
+### Q6：冷启动问题你是怎么处理的？Jaccard 相似度是什么？
+
+评分<5 条的用户，ALS 因子向量训练不充分。改用基于内容的方案：
+
+**步骤**：
+1. 提取用户所有已评分电影的类型（genres），合并去重 → "用户口味画像"
+2. 对片库中每部电影，计算其类型与用户画像的 Jaccard 相似度
+3. 排除已看过的电影，按相似度降序取 Top-N
+
+**Jaccard 相似度**：两个集合的交集大小 / 并集大小，值在 0~1 之间。
+
+**举例**：
+```
+用户 A 已评分电影的类型：
+  电影1: Action|Sci-Fi|Thriller → {Action, Sci-Fi, Thriller}
+  电影2: Action|Adventure|Sci-Fi → {Action, Adventure, Sci-Fi}
+  
+用户口味画像（取并集）: {Action, Sci-Fi, Thriller, Adventure}
+
+候选电影 C 的类型: {Action, Sci-Fi, War}
+  Jaccard = 交集{Action,Sci-Fi} / 并集{Action,Sci-Fi,Thriller,Adventure,War}
+          = 2/5 = 0.4
+
+候选电影 D 的类型: {Action, Adventure, Sci-Fi, Fantasy}
+  Jaccard = 交集{Action,Adventure,Sci-Fi} / 并集{Action,Sci-Fi,Thriller,Adventure,Fantasy}
+          = 3/5 = 0.6
+
+电影 D 得分更高 → 优先推荐
+```
+
+本质就是"你喜欢动作+科幻，我就找动作+科幻含量最高的电影推给你"。
 
 ### Q7：SQLite 和内存 dict 两种模式各有什么适用场景？
 内存模式适合小型数据集（1M），启动一次性加载，查询 O(1)。SQLite 模式适合大型数据集（25M），启动无需全量加载，按 userId 索引查询 O(log n)，多进程可共享。
