@@ -20,7 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def preflight_check(args: argparse.Namespace) -> None:
@@ -135,7 +135,7 @@ def main():
 
     # ---- Step 2: 训练 ----
     if not args.skip_train:
-        train_cmd = f"python train_als.py --data_dir {data_dir} --output_dir output"
+            train_cmd = f"python src/train_als.py --data_dir {data_dir} --output_dir output"
         train_cmd += f" --rank {args.rank} --max_iter {args.max_iter}"
         if is_large:
             train_cmd += " --driver_memory 4g"
@@ -156,7 +156,7 @@ def main():
         print(f"\n[跳过] 模型训练")
 
     # ---- Step 3: 启动 API ----
-    serve_cmd = f"python app.py --port {args.port}"
+        serve_cmd = f"python src/app.py --port {args.port}"
     serve_cmd += f" --recs_dir output/user_recs --movies_dir output/movies"
     serve_cmd += f" --log_file {args.log_file}"
     if is_large:
